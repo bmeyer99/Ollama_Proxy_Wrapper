@@ -39,38 +39,56 @@ Your App → :11434 (Proxy) → :11435 (Ollama)
          Metrics Collection
 ```
 
-## Files
+## Project Structure
 
-- `ollama_hybrid_proxy.py` - The metrics collection proxy
-- `ollama_wrapper.py` - Manages Ollama and proxy startup
-- `quick_install.bat` - Windows installer
-- `test_metrics.ps1` - Verify installation
+- **`ollama_hybrid_proxy.py`** - Async metrics proxy with dual collection (Prometheus + Analytics)
+- **`ollama_wrapper.py`** - Main entry point that manages Ollama process lifecycle
+- **`quick_install.bat`** - Automated Windows installer with dependency check
+- **`ollama_metrics.bat`** - Simplified Windows launcher
+- **`ollama.ps1`** - Advanced PowerShell wrapper with enhanced features
+- **`CLAUDE.md`** - Comprehensive development and architecture guide
 
 ## Metrics Collected
 
 ### Prometheus Metrics (Low Cardinality)
-- `ollama_requests_total` - Request count by model, endpoint, status
-- `ollama_request_duration_seconds` - Latency histogram
+- `ollama_requests_total` - Request count by model, endpoint, status, prompt category
+- `ollama_request_duration_seconds` - Latency distribution histogram
+- `ollama_tokens_generated` - Token generation count histogram
 - `ollama_tokens_per_second` - Generation speed histogram
-- `ollama_tokens_total` - Total tokens processed
+- `ollama_active_requests` - Currently processing requests gauge
+- `ollama_analytics_queue_size` - Analytics write queue depth
+- `ollama_analytics_writes_total` - Analytics write success/error counter
 
 ### Analytics Storage (High Detail)
-- Full prompt text
-- Response timings
-- Token counts
-- Error details
-- Searchable SQLite database
+- **Full prompt text** with categorization
+- **Detailed timings** (eval, load, total duration)
+- **Token metrics** (prompt tokens, generated tokens, tokens/sec)
+- **Request metadata** (client IP, user agent, interaction ID)
+- **Error tracking** with full stack traces
+- **Multiple backends**: JSONL (compressed), SQLite (searchable), Loki (planned)
+- **Automatic cleanup** based on retention policy
 
 ## Advanced Features
 
-### PowerShell Launcher
+### Multiple Launch Options
 
-For additional features, use the PowerShell wrapper:
+**Windows Batch (Simple)**:
+```cmd
+ollama_metrics.bat run phi4
+ollama_metrics.bat serve
+```
 
+**PowerShell (Advanced)**:
 ```powershell
 .\ollama.ps1 run phi4        # Start with metrics
-.\ollama.ps1 -Action status   # Check status
-.\ollama.ps1 -Action test     # Test setup
+.\ollama.ps1 list            # List models (passthrough)
+.\ollama.ps1 serve           # Start server with metrics
+```
+
+**Direct Python**:
+```bash
+python ollama_wrapper.py run phi4
+python ollama_wrapper.py serve
 ```
 
 ### Analytics Backends
@@ -78,34 +96,61 @@ For additional features, use the PowerShell wrapper:
 Configure storage backend via environment variable:
 
 ```bash
-# Default: Compressed JSON files
+# Compressed JSONL files (default) - efficient for log aggregation
 set ANALYTICS_BACKEND=jsonl
 
-# Option: SQLite database with search API
+# SQLite database - enables search API and complex queries
 set ANALYTICS_BACKEND=sqlite
+
+# Loki integration - for centralized log aggregation (planned)
+set ANALYTICS_BACKEND=loki
 ```
 
-### Analytics Queries
+**Backend Comparison**:
+- **JSONL**: Fastest writes, great for log shipping, compressed storage
+- **SQLite**: Searchable, queryable, best for analysis and debugging
+- **Loki**: Centralized logging, good for multi-instance deployments
 
-With SQLite backend, query historical data:
+### Analytics API (SQLite Backend)
+
+Query historical interaction data:
 
 ```bash
-# Find slow requests
-curl "http://localhost:11434/analytics/search?min_duration=10"
+# Get analytics statistics
+curl http://localhost:11434/analytics/stats
+
+# Search by time range
+curl "http://localhost:11434/analytics/search?start_time=1640995200&end_time=1641081600"
 
 # Search by prompt content
 curl "http://localhost:11434/analytics/search?prompt_search=summarize"
 
 # Filter by model
 curl "http://localhost:11434/analytics/search?model=phi4"
+
+# Find interactions by category
+curl "http://localhost:11434/analytics/search?prompt_category=code_write"
 ```
+
+**Available Search Parameters**:
+- `start_time`, `end_time` - Unix timestamps
+- `model` - Exact model name match
+- `prompt_search` - Text search in prompt content
+- `prompt_category` - Categorized prompt types
+- Results limited to 100 records, ordered by timestamp DESC
 
 ### Configuration
 
-Environment variables:
-- `ANALYTICS_BACKEND` - Storage backend (jsonl, sqlite)
-- `ANALYTICS_DIR` - Storage directory (default: ./ollama_analytics)
-- `ANALYTICS_RETENTION_DAYS` - Data retention period (default: 7)
+**Environment Variables**:
+- `ANALYTICS_BACKEND` - Storage backend (`jsonl`, `sqlite`, `loki`)
+- `ANALYTICS_DIR` - Storage directory (default: `./ollama_analytics`)
+- `ANALYTICS_RETENTION_DAYS` - Data retention period (default: 7 days)
+- `OLLAMA_HOST` - Internal: Controls Ollama server binding
+
+**Port Configuration**:
+- **11434**: Proxy port (what your apps connect to)
+- **11435**: Internal Ollama port (hidden from users)
+- Ports are automatically checked for conflicts on startup
 
 ## Prometheus Integration
 
@@ -126,15 +171,19 @@ histogram_quantile(0.95,
   rate(ollama_request_duration_seconds_bucket[5m])
 ) by (prompt_category)
 
-# Tokens per second by model
-rate(ollama_tokens_total[5m]) by (model)
+# Token generation rate by model
+rate(ollama_tokens_generated_sum[5m]) by (model)
+
+# Average tokens per second
+rate(ollama_tokens_per_second_sum[5m]) / rate(ollama_tokens_per_second_count[5m])
 ```
 
 ## Requirements
 
-- Windows (Linux/Mac support planned)
-- Python 3.7+
-- Ollama installed
+- **Platform**: Windows (primary), Linux/Mac (compatible)
+- **Python**: 3.7+ with pip
+- **Ollama**: Installed and accessible via command line
+- **Dependencies**: `aiohttp`, `prometheus-client` (auto-installed)
 
 ## Architecture
 
@@ -146,11 +195,40 @@ The proxy uses:
 
 ## Troubleshooting
 
-**Port already in use**: Stop existing Ollama instances first
+### Common Issues
 
-**Python not found**: Install Python and ensure it's in PATH
+**Port Conflicts**:
+```bash
+# Check what's using Ollama's default port
+netstat -an | findstr :11434
+# Stop existing Ollama instances
+taskkill /f /im ollama.exe
+```
 
-**Missing modules**: Run `pip install aiohttp prometheus-client`
+**Python Issues**:
+```bash
+# Verify Python installation
+python --version
+# Install dependencies
+pip install aiohttp prometheus-client
+```
+
+**Connectivity Testing**:
+```bash
+# Test proxy health
+curl http://localhost:11434/test
+# Check metrics endpoint
+curl http://localhost:11434/metrics
+# Verify analytics
+curl http://localhost:11434/analytics/stats
+```
+
+**Debug Mode**:
+Check console output for detailed logging including:
+- Port binding status
+- Ollama connection health
+- Request routing information
+- Analytics write queue status
 
 ## License
 
