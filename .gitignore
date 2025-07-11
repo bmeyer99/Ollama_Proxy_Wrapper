@@ -41,3 +41,4 @@ htmlcov/
 *.coverage
 .tox/
 .nox/
+.DS_Store
