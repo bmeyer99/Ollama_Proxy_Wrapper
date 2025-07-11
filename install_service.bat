@@ -41,7 +41,7 @@ if %errorLevel% neq 0 (
 
 REM Install the service
 echo Installing Windows service...
-python ollama_service.py install
+python "%~dp0ollama_service.py" install
 
 if %errorLevel% neq 0 (
     echo ERROR: Failed to install service
@@ -55,7 +55,7 @@ sc config OllamaMetricsProxy start= auto
 
 REM Start the service
 echo Starting service...
-python ollama_service.py start
+python "%~dp0ollama_service.py" start
 
 if %errorLevel% neq 0 (
     echo WARNING: Service installed but failed to start
