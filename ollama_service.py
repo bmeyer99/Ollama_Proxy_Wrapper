@@ -175,7 +175,7 @@ class OllamaProxyService(win32serviceutil.ServiceFramework if WINDOWS_SERVICE_AV
         _svc_description_ = SERVICE_DESCRIPTION
         _svc_deps_ = None
         _exe_name_ = sys.executable
-        _exe_args_ = f'"{__file__}"'
+        _exe_args_ = f'"{os.path.abspath(__file__)}"'
     
     def __init__(self, args=None):
         if WINDOWS_SERVICE_AVAILABLE:
@@ -223,6 +223,11 @@ class OllamaProxyService(win32serviceutil.ServiceFramework if WINDOWS_SERVICE_AV
     def start_service(self):
         """Start the Ollama proxy service"""
         try:
+            # Change to script directory to ensure relative imports work
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            os.chdir(script_dir)
+            logger.info(f"Working directory: {os.getcwd()}")
+            
             self.running = True
             
             # Check if ports are available
@@ -310,6 +315,54 @@ class OllamaProxyService(win32serviceutil.ServiceFramework if WINDOWS_SERVICE_AV
         logger.info("Service stopped")
 
 
+def install_service():
+    """Custom service installation with proper paths"""
+    if not WINDOWS_SERVICE_AVAILABLE:
+        print("Windows service modules not available. Install with: pip install pywin32")
+        return False
+    
+    try:
+        # Get absolute paths
+        python_exe = sys.executable
+        script_path = os.path.abspath(__file__)
+        
+        # Ensure paths exist
+        if not os.path.exists(python_exe):
+            print(f"ERROR: Python executable not found: {python_exe}")
+            return False
+            
+        if not os.path.exists(script_path):
+            print(f"ERROR: Service script not found: {script_path}")
+            return False
+        
+        # Install with explicit paths
+        service_class_string = f"{OllamaProxyService.__module__}.{OllamaProxyService.__name__}"
+        
+        # Update the service's executable path
+        OllamaProxyService._exe_name_ = python_exe
+        OllamaProxyService._exe_args_ = f'"{script_path}"'
+        
+        print(f"Installing service {SERVICE_NAME}")
+        print(f"Python: {python_exe}")
+        print(f"Script: {script_path}")
+        
+        # Install the service
+        win32serviceutil.InstallService(
+            service_class_string,
+            SERVICE_NAME,
+            SERVICE_DISPLAY_NAME,
+            startType=win32service.SERVICE_AUTO_START,
+            description=SERVICE_DESCRIPTION
+        )
+        
+        print("Service installed")
+        return True
+        
+    except Exception as e:
+        print(f"ERROR: Failed to install service: {e}")
+        return False
+
+
 def run_console():
     """Run in console mode for testing"""
     print("=" * 60)
@@ -344,6 +397,12 @@ if __name__ == '__main__':
     if len(sys.argv) == 1:
         # No arguments - run in console mode
         run_console()
+    elif len(sys.argv) > 1 and sys.argv[1].lower() == 'install':
+        # Use custom install handler
+        if install_service():
+            sys.exit(0)
+        else:
+            sys.exit(1)
     elif WINDOWS_SERVICE_AVAILABLE:
         # Handle service operations
         win32serviceutil.HandleCommandLine(OllamaProxyService)
