@@ -34,7 +34,8 @@ A transparent proxy that adds Prometheus metrics and analytics to Ollama without
 
 Metrics are now available at:
 - `http://localhost:11434/metrics` - Prometheus metrics
-- `http://localhost:11434/analytics/search` - Query analytics
+- `http://localhost:11434/analytics` - Interactive analytics dashboard
+- `http://localhost:11434/analytics/search` - Query analytics API
 
 ## How It Works
 
@@ -51,6 +52,8 @@ Your App → :11434 (Proxy) → :11435 (Ollama)
 - **`ollama_hybrid_proxy.py`** - Async metrics proxy with dual collection (Prometheus + Analytics)
 - **`ollama_wrapper.py`** - Main entry point that manages Ollama process lifecycle
 - **`ollama_service.py`** - Windows service wrapper with system tray icon
+- **`analytics_dashboard.html`** - Interactive web dashboard for exploring analytics
+- **`Grafana/Provisioning/Dashboards/`** - Pre-configured Grafana dashboard
 - **`quick_install.bat`** - Automated Windows installer with dependency check
 - **`install_service.bat`** - Install as Windows service (run as admin)
 - **`ollama_metrics.bat`** - Simplified Windows launcher
@@ -136,31 +139,40 @@ set ANALYTICS_BACKEND=loki
 
 ### Analytics API (SQLite Backend)
 
-Query historical interaction data:
+The analytics dashboard uses these APIs - you can also query them directly:
 
 ```bash
+# Interactive dashboard (recommended)
+open http://localhost:11434/analytics
+
 # Get analytics statistics
 curl http://localhost:11434/analytics/stats
 
-# Search by time range
-curl "http://localhost:11434/analytics/search?start_time=1640995200&end_time=1641081600"
+# Get all messages with filters
+curl "http://localhost:11434/analytics/messages?model=phi4&limit=50"
 
-# Search by prompt content
-curl "http://localhost:11434/analytics/search?prompt_search=summarize"
+# Get specific message details
+curl "http://localhost:11434/analytics/messages/abc123"
 
-# Filter by model
-curl "http://localhost:11434/analytics/search?model=phi4"
+# Get list of models
+curl http://localhost:11434/analytics/models
 
-# Find interactions by category
-curl "http://localhost:11434/analytics/search?prompt_category=code_write"
+# Search with multiple filters
+curl "http://localhost:11434/analytics/messages?search=summarize&start_time=1640995200&status=success"
+
+# Export as CSV
+curl "http://localhost:11434/analytics/export?format=csv&model=phi4" -o analytics.csv
 ```
 
 **Available Search Parameters**:
+- `search` - Full-text search in prompts
 - `start_time`, `end_time` - Unix timestamps
-- `model` - Exact model name match
-- `prompt_search` - Text search in prompt content
-- `prompt_category` - Categorized prompt types
-- Results limited to 100 records, ordered by timestamp DESC
+- `model` - Filter by model name
+- `status` - Filter by status (success, error, timeout)
+- `min_input_tokens`, `max_input_tokens` - Token count range
+- `min_latency`, `max_latency` - Response time range (ms)
+- `limit`, `offset` - Pagination
+- `format` - Export format (json, csv)
 
 ### Configuration
 
@@ -175,6 +187,60 @@ curl "http://localhost:11434/analytics/search?prompt_category=code_write"
 - **11435**: Internal Ollama port (hidden from users)
 - Ports are automatically checked for conflicts on startup
 
+## Monitoring Dashboards
+
+### 1. Interactive Analytics Dashboard
+
+Access at `http://localhost:11434/analytics` (requires SQLite backend)
+
+**Features**:
+- **Search & Filter**: Full-text search across prompts with advanced filtering
+- **Interactive Charts**: Click on data points to drill down
+  - Message timeline with zoom and time selection
+  - Prompt category distribution
+  - Token usage scatter plot
+  - Response time histogram
+- **Message Explorer**: Browse all requests with click-through to details
+- **Detailed View**: See full prompts, responses, performance metrics
+- **Export**: Download filtered data as CSV or JSON
+- **Real-time Updates**: Auto-refresh every 30 seconds
+
+**Enable Analytics Dashboard**:
+```bash
+# Start with SQLite backend for full analytics
+set ANALYTICS_BACKEND=sqlite
+python ollama_wrapper.py serve
+
+# Visit http://localhost:11434/analytics
+```
+
+### 2. Grafana Dashboard
+
+Pre-configured dashboard at `Grafana/Provisioning/Dashboards/grafana_ollama_dashboard.json`
+
+**Panels Include**:
+- Request rate and average latency summary cards
+- Error rate and token generation speed
+- Request rate & P95 latency by model (time series)
+- Token generation speed comparison
+- Request latency heatmap
+- Time to first token by model
+- Token usage breakdown (pie chart)
+- Model performance comparison table
+- Error tracking and active alerts
+
+**Setup Grafana**:
+```yaml
+# docker-compose.yml
+services:
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./Grafana/Provisioning:/etc/grafana/provisioning
+```
+
 ## Prometheus Integration
 
 Example `prometheus.yml`:
@@ -184,6 +250,7 @@ scrape_configs:
   - job_name: 'ollama'
     static_configs:
       - targets: ['localhost:11434']
+    scrape_interval: 10s
 ```
 
 Example queries:

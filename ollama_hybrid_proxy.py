@@ -233,68 +233,39 @@ class AnalyticsWriter:
         self.write_queue.put(record)
         analytics_queue_size.set(self.write_queue.qsize())
     
+    def build_conditions(self, params_dict):
+        """Build SQL conditions and parameters for search"""
+        conditions = []
+        params = []
+        def add(cond, val, conv=lambda x: x):
+            if val is not None and val != '':
+                conditions.append(cond)
+                params.append(conv(val))
+        add('timestamp >= ?', params_dict.get('start_time'), float)
+        add('timestamp <= ?', params_dict.get('end_time'), float)
+        add('model = ?', params_dict.get('model'))
+        if params_dict.get('search'):
+            conditions.append('(prompt_full LIKE ? OR prompt_full LIKE ?)')
+            search_term = f"%{params_dict['search']}%"
+            params.extend([search_term, search_term])
+        add('prompt_full LIKE ?', params_dict.get('prompt_search'), lambda x: f"%{x}%")
+        add('status = ?', params_dict.get('status'))
+        add('prompt_tokens >= ?', params_dict.get('min_input_tokens'), int)
+        add('prompt_tokens <= ?', params_dict.get('max_input_tokens'), int)
+        add('duration_seconds >= ?', params_dict.get('min_latency'), lambda x: float(x) / 1000)
+        add('duration_seconds <= ?', params_dict.get('max_latency'), lambda x: float(x) / 1000)
+        return conditions, params
+
     def search(self, query_params):
         """Search analytics (only for sqlite backend)"""
         if self.backend != 'sqlite':
             return {"error": "Search only available with sqlite backend"}
-        
-        conditions = []
-        params = []
-        
-        # Time filters
-        if 'start_time' in query_params:
-            conditions.append('timestamp >= ?')
-            params.append(float(query_params['start_time']))
-        
-        if 'end_time' in query_params:
-            conditions.append('timestamp <= ?')
-            params.append(float(query_params['end_time']))
-        
-        # Model filter
-        if 'model' in query_params and query_params['model']:
-            conditions.append('model = ?')
-            params.append(query_params['model'])
-        
-        # Search filter (searches both prompt and response)
-        if 'search' in query_params and query_params['search']:
-            conditions.append('(prompt_full LIKE ? OR prompt_full LIKE ?)')
-            search_term = f"%{query_params['search']}%"
-            params.extend([search_term, search_term])
-        
-        # Legacy prompt_search support
-        if 'prompt_search' in query_params and query_params['prompt_search']:
-            conditions.append('prompt_full LIKE ?')
-            params.append(f"%{query_params['prompt_search']}%")
-        
-        # Status filter
-        if 'status' in query_params and query_params['status']:
-            conditions.append('status = ?')
-            params.append(query_params['status'])
-        
-        # Token filters
-        if 'min_input_tokens' in query_params:
-            conditions.append('prompt_tokens >= ?')
-            params.append(int(query_params['min_input_tokens']))
-        
-        if 'max_input_tokens' in query_params:
-            conditions.append('prompt_tokens <= ?')
-            params.append(int(query_params['max_input_tokens']))
-        
-        # Latency filters (convert ms to seconds)
-        if 'min_latency' in query_params:
-            conditions.append('duration_seconds >= ?')
-            params.append(float(query_params['min_latency']) / 1000)
-        
-        if 'max_latency' in query_params:
-            conditions.append('duration_seconds <= ?')
-            params.append(float(query_params['max_latency']) / 1000)
-        
+
+        conditions, params = self.build_conditions(query_params)
         where_clause = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
-        
-        # Handle limit and offset
         limit = int(query_params.get('limit', 1000))
         offset = int(query_params.get('offset', 0))
-        
+
         query = f'''
             SELECT 
                 interaction_id as id,
@@ -322,27 +293,24 @@ class AnalyticsWriter:
             ORDER BY timestamp DESC
             LIMIT {limit} OFFSET {offset}
         '''
-        
+
         cursor = self.conn.execute(query, params)
         columns = [desc[0] for desc in cursor.description]
         results = []
-        
-        for row in cursor.fetchall():
-            record = dict(zip(columns, row))
+
+        def process_metadata(record):
             if record['metadata']:
                 try:
                     record['metadata'] = json.loads(record['metadata'])
-                except:
+                except Exception:
                     record['metadata'] = {}
-            
-            # Add user from metadata if available
-            if isinstance(record.get('metadata'), dict):
-                record['user'] = record['metadata'].get('user', 'anonymous')
-            else:
-                record['user'] = 'anonymous'
-                
-            results.append(record)
-        
+            record['user'] = record['metadata'].get('user', 'anonymous') if isinstance(record.get('metadata'), dict) else 'anonymous'
+            return record
+
+        for row in cursor.fetchall():
+            record = dict(zip(columns, row))
+            results.append(process_metadata(record))
+
         return results
     
     def cleanup_old_data(self):
@@ -397,7 +365,7 @@ class HybridOllamaProxy:
         self.app.router.add_route('*', '/{path:.*}', self.handle_proxy)
         
         # Startup event to create cleanup task
-        async def on_startup(app):
+        def on_startup(app):
             self.cleanup_task = asyncio.create_task(self._periodic_cleanup())
         
         self.app.on_startup.append(on_startup)
@@ -435,7 +403,7 @@ class HybridOllamaProxy:
         
         return prompt_full, prompt_preview, prompt_category
     
-    async def handle_metrics(self, request):
+    def handle_metrics(self, request):
         """Serve Prometheus metrics"""
         metrics = generate_latest()
         return web.Response(
@@ -444,7 +412,7 @@ class HybridOllamaProxy:
             charset='utf-8'
         )
     
-    async def handle_analytics_dashboard(self, request):
+    def handle_analytics_dashboard(self, request):
         """Serve the analytics dashboard HTML"""
         dashboard_path = Path(__file__).parent / 'analytics_dashboard.html'
         if dashboard_path.exists():
@@ -456,7 +424,7 @@ class HybridOllamaProxy:
         else:
             return web.Response(text="Analytics dashboard not found", status=404)
     
-    async def handle_analytics_messages(self, request):
+    def handle_analytics_messages(self, request):
         """Get filtered messages for analytics dashboard"""
         if self.analytics.backend != 'sqlite':
             return web.json_response({
@@ -466,7 +434,7 @@ class HybridOllamaProxy:
         results = self.analytics.search(dict(request.query))
         return web.json_response(results)
     
-    async def handle_analytics_message_detail(self, request):
+    def handle_analytics_message_detail(self, request):
         """Get detailed message by ID"""
         message_id = request.match_info['id']
         if self.analytics.backend != 'sqlite':
@@ -509,7 +477,7 @@ class HybridOllamaProxy:
             if record['metadata']:
                 try:
                     record['metadata'] = json.loads(record['metadata'])
-                except:
+                except Exception:
                     record['metadata'] = {}
             
             # Add calculated fields
@@ -522,7 +490,7 @@ class HybridOllamaProxy:
         else:
             return web.json_response({"error": "Message not found"}, status=404)
     
-    async def handle_analytics_models(self, request):
+    def handle_analytics_models(self, request):
         """Get list of models from analytics"""
         if self.analytics.backend != 'sqlite':
             return web.json_response([])
@@ -532,7 +500,7 @@ class HybridOllamaProxy:
         models = [row[0] for row in cursor.fetchall()]
         return web.json_response(models)
     
-    async def handle_analytics_search(self, request):
+    def handle_analytics_search(self, request):
         """Search analytics data"""
         if self.analytics.backend != 'sqlite':
             return web.json_response({
@@ -542,7 +510,7 @@ class HybridOllamaProxy:
         results = self.analytics.search(dict(request.query))
         return web.json_response(results)
     
-    async def handle_analytics_export(self, request):
+    def handle_analytics_export(self, request):
         """Export analytics data"""
         if self.analytics.backend != 'sqlite':
             return web.json_response({
@@ -570,7 +538,7 @@ class HybridOllamaProxy:
         else:
             return web.json_response(results)
     
-    async def handle_analytics_stats(self, request):
+    def handle_analytics_stats(self, request):
         """Get analytics statistics"""
         stats = {
             "backend": self.analytics.backend,
@@ -643,7 +611,6 @@ class HybridOllamaProxy:
                 interaction_record['prompt_category'] = prompt_category
             except Exception as e:
                 logger.error(f"Failed to parse body: {e}")
-                pass
         
         model = interaction_record['model']
         prompt_category = interaction_record['prompt_category']
@@ -687,7 +654,7 @@ class HybridOllamaProxy:
                             response_data = json.loads(content)
                             metrics = self.extract_metrics(response_data)
                             interaction_record.update(metrics)
-                        except:
+                        except Exception:
                             pass
                         
                         # Record everything
@@ -729,7 +696,7 @@ class HybridOllamaProxy:
                     data = json.loads(line_str)
                     current_metrics = self.extract_metrics(data)
                     metrics.update(current_metrics)
-            except:
+            except Exception:
                 pass
         
         # Update interaction record with final metrics
