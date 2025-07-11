@@ -241,6 +241,7 @@ class AnalyticsWriter:
         conditions = []
         params = []
         
+        # Time filters
         if 'start_time' in query_params:
             conditions.append('timestamp >= ?')
             params.append(float(query_params['start_time']))
@@ -249,21 +250,77 @@ class AnalyticsWriter:
             conditions.append('timestamp <= ?')
             params.append(float(query_params['end_time']))
         
-        if 'model' in query_params:
+        # Model filter
+        if 'model' in query_params and query_params['model']:
             conditions.append('model = ?')
             params.append(query_params['model'])
         
-        if 'prompt_search' in query_params:
+        # Search filter (searches both prompt and response)
+        if 'search' in query_params and query_params['search']:
+            conditions.append('(prompt_full LIKE ? OR prompt_full LIKE ?)')
+            search_term = f"%{query_params['search']}%"
+            params.extend([search_term, search_term])
+        
+        # Legacy prompt_search support
+        if 'prompt_search' in query_params and query_params['prompt_search']:
             conditions.append('prompt_full LIKE ?')
             params.append(f"%{query_params['prompt_search']}%")
         
+        # Status filter
+        if 'status' in query_params and query_params['status']:
+            conditions.append('status = ?')
+            params.append(query_params['status'])
+        
+        # Token filters
+        if 'min_input_tokens' in query_params:
+            conditions.append('prompt_tokens >= ?')
+            params.append(int(query_params['min_input_tokens']))
+        
+        if 'max_input_tokens' in query_params:
+            conditions.append('prompt_tokens <= ?')
+            params.append(int(query_params['max_input_tokens']))
+        
+        # Latency filters (convert ms to seconds)
+        if 'min_latency' in query_params:
+            conditions.append('duration_seconds >= ?')
+            params.append(float(query_params['min_latency']) / 1000)
+        
+        if 'max_latency' in query_params:
+            conditions.append('duration_seconds <= ?')
+            params.append(float(query_params['max_latency']) / 1000)
+        
         where_clause = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
         
+        # Handle limit and offset
+        limit = int(query_params.get('limit', 1000))
+        offset = int(query_params.get('offset', 0))
+        
         query = f'''
-            SELECT * FROM interactions
+            SELECT 
+                interaction_id as id,
+                timestamp,
+                model,
+                endpoint,
+                prompt_category as category,
+                prompt_full as prompt,
+                prompt_tokens as input_tokens,
+                generated_tokens as output_tokens,
+                tokens_per_second,
+                duration_seconds as latency,
+                eval_duration_seconds,
+                load_duration_seconds,
+                status,
+                error,
+                metadata,
+                CASE 
+                    WHEN prompt_tokens > 0 AND generated_tokens > 0 
+                    THEN (prompt_tokens * 0.00001 + generated_tokens * 0.00003)
+                    ELSE 0 
+                END as cost
+            FROM interactions
             {where_clause}
             ORDER BY timestamp DESC
-            LIMIT 100
+            LIMIT {limit} OFFSET {offset}
         '''
         
         cursor = self.conn.execute(query, params)
@@ -273,7 +330,17 @@ class AnalyticsWriter:
         for row in cursor.fetchall():
             record = dict(zip(columns, row))
             if record['metadata']:
-                record['metadata'] = json.loads(record['metadata'])
+                try:
+                    record['metadata'] = json.loads(record['metadata'])
+                except:
+                    record['metadata'] = {}
+            
+            # Add user from metadata if available
+            if isinstance(record.get('metadata'), dict):
+                record['user'] = record['metadata'].get('user', 'anonymous')
+            else:
+                record['user'] = 'anonymous'
+                
             results.append(record)
         
         return results
@@ -311,7 +378,14 @@ class HybridOllamaProxy:
         # Monitoring endpoints
         self.app.router.add_get('/metrics', self.handle_metrics)
         
-        # Analytics endpoints
+        # Analytics dashboard
+        self.app.router.add_get('/analytics', self.handle_analytics_dashboard)
+        self.app.router.add_get('/analytics/', self.handle_analytics_dashboard)
+        
+        # Analytics API endpoints
+        self.app.router.add_get('/analytics/messages', self.handle_analytics_messages)
+        self.app.router.add_get('/analytics/messages/{id}', self.handle_analytics_message_detail)
+        self.app.router.add_get('/analytics/models', self.handle_analytics_models)
         self.app.router.add_get('/analytics/search', self.handle_analytics_search)
         self.app.router.add_get('/analytics/export', self.handle_analytics_export)
         self.app.router.add_get('/analytics/stats', self.handle_analytics_stats)
@@ -370,6 +444,94 @@ class HybridOllamaProxy:
             charset='utf-8'
         )
     
+    async def handle_analytics_dashboard(self, request):
+        """Serve the analytics dashboard HTML"""
+        dashboard_path = Path(__file__).parent / 'analytics_dashboard.html'
+        if dashboard_path.exists():
+            with open(dashboard_path, 'r') as f:
+                html_content = f.read()
+            # Update API endpoint to use relative URLs
+            html_content = html_content.replace("'/analytics/", "'/analytics/")
+            return web.Response(text=html_content, content_type='text/html')
+        else:
+            return web.Response(text="Analytics dashboard not found", status=404)
+    
+    async def handle_analytics_messages(self, request):
+        """Get filtered messages for analytics dashboard"""
+        if self.analytics.backend != 'sqlite':
+            return web.json_response({
+                "error": "Analytics only available with sqlite backend. Current: " + self.analytics.backend
+            }, status=400)
+        
+        results = self.analytics.search(dict(request.query))
+        return web.json_response(results)
+    
+    async def handle_analytics_message_detail(self, request):
+        """Get detailed message by ID"""
+        message_id = request.match_info['id']
+        if self.analytics.backend != 'sqlite':
+            return web.json_response({
+                "error": "Analytics only available with sqlite backend"
+            }, status=400)
+        
+        conn = self.analytics.conn
+        cursor = conn.execute('''
+            SELECT 
+                interaction_id as id,
+                timestamp,
+                model,
+                endpoint,
+                prompt_category as category,
+                prompt_full as prompt,
+                prompt_tokens as input_tokens,
+                generated_tokens as output_tokens,
+                tokens_per_second,
+                duration_seconds as latency,
+                eval_duration_seconds as eval_duration,
+                load_duration_seconds as load_duration,
+                status,
+                error,
+                metadata,
+                CASE 
+                    WHEN prompt_tokens > 0 AND generated_tokens > 0 
+                    THEN (prompt_tokens * 0.00001 + generated_tokens * 0.00003)
+                    ELSE 0 
+                END as cost
+            FROM interactions 
+            WHERE interaction_id = ?
+        ''', (message_id,))
+        
+        columns = [desc[0] for desc in cursor.description]
+        row = cursor.fetchone()
+        
+        if row:
+            record = dict(zip(columns, row))
+            if record['metadata']:
+                try:
+                    record['metadata'] = json.loads(record['metadata'])
+                except:
+                    record['metadata'] = {}
+            
+            # Add calculated fields
+            record['user'] = record.get('metadata', {}).get('user', 'anonymous')
+            record['response'] = 'Response data not stored in current version'
+            record['queue_time'] = 0  # Would need to track this separately
+            record['time_to_first_token'] = record.get('eval_duration', 0) * 0.1 if record.get('eval_duration') else 0
+            
+            return web.json_response(record)
+        else:
+            return web.json_response({"error": "Message not found"}, status=404)
+    
+    async def handle_analytics_models(self, request):
+        """Get list of models from analytics"""
+        if self.analytics.backend != 'sqlite':
+            return web.json_response([])
+        
+        conn = self.analytics.conn
+        cursor = conn.execute('SELECT DISTINCT model FROM interactions WHERE model IS NOT NULL')
+        models = [row[0] for row in cursor.fetchall()]
+        return web.json_response(models)
+    
     async def handle_analytics_search(self, request):
         """Search analytics data"""
         if self.analytics.backend != 'sqlite':
@@ -382,8 +544,31 @@ class HybridOllamaProxy:
     
     async def handle_analytics_export(self, request):
         """Export analytics data"""
-        # This could export to CSV, JSON, etc.
-        return web.json_response({"status": "export endpoint - not yet implemented"})
+        if self.analytics.backend != 'sqlite':
+            return web.json_response({
+                "error": "Export only available with sqlite backend"
+            }, status=400)
+        
+        format_type = request.query.get('format', 'json')
+        results = self.analytics.search(dict(request.query))
+        
+        if format_type == 'csv':
+            import csv
+            import io
+            
+            output = io.StringIO()
+            if results:
+                writer = csv.DictWriter(output, fieldnames=results[0].keys())
+                writer.writeheader()
+                writer.writerows(results)
+            
+            return web.Response(
+                text=output.getvalue(),
+                content_type='text/csv',
+                headers={'Content-Disposition': 'attachment; filename="ollama_analytics.csv"'}
+            )
+        else:
+            return web.json_response(results)
     
     async def handle_analytics_stats(self, request):
         """Get analytics statistics"""
@@ -613,7 +798,9 @@ class HybridOllamaProxy:
         logger.info(f"Proxying to Ollama at {self.ollama_host}")
         logger.info(f"Analytics backend: {self.analytics.backend}")
         logger.info(f"Metrics: http://localhost:{self.proxy_port}/metrics")
-        logger.info(f"Analytics search: http://localhost:{self.proxy_port}/analytics/search")
+        logger.info(f"Analytics Dashboard: http://localhost:{self.proxy_port}/analytics")
+        if self.analytics.backend != 'sqlite':
+            logger.warning("Analytics dashboard requires sqlite backend for full functionality")
         web.run_app(self.app, host='0.0.0.0', port=self.proxy_port)
 
 if __name__ == '__main__':
