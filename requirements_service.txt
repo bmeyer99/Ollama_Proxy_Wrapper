@@ -1,0 +1,16 @@
+# Requirements for Ollama Metrics Proxy Windows Service
+
+# Core proxy dependencies (already required)
+aiohttp>=3.8.0
+prometheus-client>=0.15.0
+
+# Windows service support
+pywin32>=306
+
+# Optional: Better system tray support (alternative to tkinter)
+# pystray>=0.19.0
+# Pillow>=9.0.0
+
+# Development/testing
+# pytest>=7.0.0
+# pytest-asyncio>=0.21.0

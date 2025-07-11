@@ -15,6 +15,10 @@ quick_install.bat
 
 # Manual installation of dependencies
 pip install aiohttp prometheus-client
+
+# Windows Service Installation (runs on startup)
+install_service.bat           # Run as Administrator
+.\service_manager.ps1 install # PowerShell alternative
 ```
 
 ### Running the Proxy
@@ -32,6 +36,11 @@ ollama_metrics.bat run phi4    # Windows batch
 # Simple commands (bypass proxy)
 python ollama_wrapper.py list
 python ollama_wrapper.py ps
+
+# Windows Service Mode (background, no terminal)
+.\service_manager.ps1 start   # Start service
+.\service_manager.ps1 status  # Check status
+.\service_manager.ps1 test    # Test in console mode
 ```
 
 ### Testing and Debugging
@@ -84,6 +93,12 @@ netstat -an | findstr :11435
    - Thread-safe writing to prevent blocking proxy
    - Configurable backends with automatic cleanup
    - Supports JSONL (compressed), SQLite (searchable), and Loki integration
+
+5. **ollama_service.py** - Windows service wrapper for background operation
+   - Runs proxy as Windows service (starts on boot)
+   - System tray icon with status monitoring (🦙🔒)
+   - Service management via install/uninstall scripts
+   - Automatic process lifecycle management
 
 ### Request Flow
 ```

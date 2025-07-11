@@ -100,4 +100,15 @@ echo   http://localhost:11434/analytics/stats
 echo.
 echo Optional: Add %CD% to your PATH to use from anywhere
 echo.
+echo ================================================
+echo    NEW: Windows Service Mode Available!
+echo ================================================
+echo For automatic startup with Windows (no terminal needed):
+echo   Right-click install_service.bat → Run as administrator
+echo.
+echo This will:
+echo   - Run proxy as a Windows service
+echo   - Start automatically on boot
+echo   - Show system tray icon
+echo.
 pause

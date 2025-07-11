@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Analytics data
+ollama_analytics/
+*.jsonl
+*.jsonl.gz
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+
+# Windows service logs
+ollama_service/
+
+# Generated files
+ollama_metrics.bat
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.coverage
+.tox/
+.nox/

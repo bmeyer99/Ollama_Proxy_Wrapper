@@ -11,6 +11,13 @@ A transparent proxy that adds Prometheus metrics and analytics to Ollama without
 
 ## Quick Start
 
+### Option 1: Run as Windows Service (Recommended)
+1. Clone this repository
+2. Right-click `install_service.bat` → Run as administrator
+3. Service starts automatically with Windows boot
+4. Look for 🦙🔒 icon in system tray
+
+### Option 2: Manual Start
 1. Clone this repository
 2. Install Python dependencies:
    ```bash
@@ -43,10 +50,14 @@ Your App → :11434 (Proxy) → :11435 (Ollama)
 
 - **`ollama_hybrid_proxy.py`** - Async metrics proxy with dual collection (Prometheus + Analytics)
 - **`ollama_wrapper.py`** - Main entry point that manages Ollama process lifecycle
+- **`ollama_service.py`** - Windows service wrapper with system tray icon
 - **`quick_install.bat`** - Automated Windows installer with dependency check
+- **`install_service.bat`** - Install as Windows service (run as admin)
 - **`ollama_metrics.bat`** - Simplified Windows launcher
 - **`ollama.ps1`** - Advanced PowerShell wrapper with enhanced features
+- **`service_manager.ps1`** - PowerShell service management tool
 - **`CLAUDE.md`** - Comprehensive development and architecture guide
+- **`WINDOWS_SERVICE.md`** - Windows service installation guide
 
 ## Metrics Collected
 
@@ -71,6 +82,18 @@ Your App → :11434 (Proxy) → :11435 (Ollama)
 ## Advanced Features
 
 ### Multiple Launch Options
+
+**Windows Service (Background)**:
+```powershell
+# Install and start service (run as admin)
+.\service_manager.ps1 install
+
+# Service management
+.\service_manager.ps1 status   # Check status
+.\service_manager.ps1 start    # Start service
+.\service_manager.ps1 stop     # Stop service
+.\service_manager.ps1 test     # Test in console mode
+```
 
 **Windows Batch (Simple)**:
 ```cmd
@@ -184,6 +207,7 @@ rate(ollama_tokens_per_second_sum[5m]) / rate(ollama_tokens_per_second_count[5m]
 - **Python**: 3.7+ with pip
 - **Ollama**: Installed and accessible via command line
 - **Dependencies**: `aiohttp`, `prometheus-client` (auto-installed)
+- **Windows Service**: `pywin32` (auto-installed by service installer)
 
 ## Architecture
 
@@ -192,6 +216,7 @@ The proxy uses:
 - Automatic prompt categorization to limit cardinality
 - Async write queue for analytics storage
 - Transparent request forwarding
+- Windows service mode with system tray icon (🦙🔒)
 
 ## Troubleshooting
 
@@ -213,6 +238,16 @@ python --version
 pip install aiohttp prometheus-client
 ```
 
+**Windows Service Issues**:
+```bash
+# Check service status
+.\service_manager.ps1 status
+# View service logs
+type %TEMP%\ollama_service\ollama_service.log
+# Test without installing
+python ollama_service.py
+```
+
 **Connectivity Testing**:
 ```bash
 # Test proxy health
@@ -229,6 +264,7 @@ Check console output for detailed logging including:
 - Ollama connection health
 - Request routing information
 - Analytics write queue status
+- Service installation logs in `%TEMP%\ollama_service\`
 
 ## License
 
