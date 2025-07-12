@@ -13,15 +13,24 @@ A transparent proxy that adds Prometheus metrics and analytics to Ollama without
 
 ### Option 1: Run as Windows Service (Recommended)
 1. Clone this repository
-2. Right-click `install_service.bat` → Run as administrator
-3. Service starts automatically with Windows boot
-4. Look for 🦙🔒 icon in system tray
+2. **Install the service** (choose any method):
+   - **Easiest**: Double-click `install-service-launcher.bat`
+   - **Alternative**: Right-click `Install-Service.ps1` → "Run with PowerShell"
+   - **Command line**: `powershell -ExecutionPolicy Bypass -File .\Install-Service.ps1`
+3. The installer will:
+   - Automatically stop any running Ollama processes
+   - Disable Ollama auto-start to prevent conflicts  
+   - Handle Microsoft Store Python installations
+4. Service starts automatically with Windows boot
+5. Look for 🦙🔒 icon in system tray
+
+**Note**: The installer detects existing Ollama installations and asks permission to stop/disable auto-start. All settings are restored when you uninstall.
 
 ### Option 2: Manual Start
 1. Clone this repository
 2. Install Python dependencies:
    ```bash
-   pip install aiohttp prometheus-client
+   pip install fastapi uvicorn httpx prometheus-client
    ```
 3. Run the installer:
    ```bash
@@ -49,16 +58,18 @@ Your App → :11434 (Proxy) → :11435 (Ollama)
 
 ## Project Structure
 
-- **`ollama_hybrid_proxy.py`** - Async metrics proxy with dual collection (Prometheus + Analytics)
+- **`ollama_fastapi_proxy.py`** - FastAPI-based metrics proxy with dual collection (Python 3.13 compatible)
 - **`ollama_wrapper.py`** - Main entry point that manages Ollama process lifecycle
-- **`ollama_service.py`** - Windows service wrapper with system tray icon
+- **`ollama_runner.py`** - Clean Python runner for Windows service (WinSW compatible)
 - **`analytics_dashboard.html`** - Interactive web dashboard for exploring analytics
 - **`Grafana/Provisioning/Dashboards/`** - Pre-configured Grafana dashboard
 - **`quick_install.bat`** - Automated Windows installer with dependency check
-- **`install_service.bat`** - Install as Windows service (run as admin)
+- **`Install-Service.ps1`** - Install as Windows service (PowerShell, run as admin)
+- **`Uninstall-Service.ps1`** - Uninstall Windows service (PowerShell, run as admin)
+- **`ServiceUtilities.ps1`** - Shared utilities for service management scripts
+- **`OllamaManager.ps1`** - Handles Ollama process and auto-start management
 - **`ollama_metrics.bat`** - Simplified Windows launcher
 - **`ollama.ps1`** - Advanced PowerShell wrapper with enhanced features
-- **`service_manager.ps1`** - PowerShell service management tool
 - **`CLAUDE.md`** - Comprehensive development and architecture guide
 - **`WINDOWS_SERVICE.md`** - Windows service installation guide
 
@@ -87,15 +98,20 @@ Your App → :11434 (Proxy) → :11435 (Ollama)
 ### Multiple Launch Options
 
 **Windows Service (Background)**:
-```powershell
-# Install and start service (run as admin)
-.\service_manager.ps1 install
+```bash
+# Install service (easiest methods)
+install-service-launcher.bat                    # Double-click or run
+# OR: Right-click Install-Service.ps1 → "Run with PowerShell"
 
-# Service management
-.\service_manager.ps1 status   # Check status
-.\service_manager.ps1 start    # Start service
-.\service_manager.ps1 stop     # Stop service
-.\service_manager.ps1 test     # Test in console mode
+# Uninstall service  
+uninstall-service-launcher.bat                  # Double-click or run
+# OR: Right-click Uninstall-Service.ps1 → "Run with PowerShell"
+
+# Service management with standard Windows commands
+net start OllamaMetricsProxy    # Start service
+net stop OllamaMetricsProxy     # Stop service  
+sc query OllamaMetricsProxy     # Check status
+python ollama_runner.py         # Test in console mode
 ```
 
 **Windows Batch (Simple)**:
@@ -271,19 +287,20 @@ rate(ollama_tokens_per_second_sum[5m]) / rate(ollama_tokens_per_second_count[5m]
 ## Requirements
 
 - **Platform**: Windows (primary), Linux/Mac (compatible)
-- **Python**: 3.7+ with pip
+- **Python**: 3.8+ with pip (python.org recommended, Python 3.13 fully supported)
 - **Ollama**: Installed and accessible via command line
-- **Dependencies**: `aiohttp`, `prometheus-client` (auto-installed)
-- **Windows Service**: `pywin32` (auto-installed by service installer)
+- **Dependencies**: `fastapi`, `uvicorn`, `httpx`, `prometheus-client` (auto-installed)
+- **Windows Service**: WinSW-based (modern, reliable service wrapper)
 
 ## Architecture
 
 The proxy uses:
+- **FastAPI + httpx** for Python 3.13 compatibility and reliability
 - Histograms for efficient Prometheus metrics
 - Automatic prompt categorization to limit cardinality
 - Async write queue for analytics storage
 - Transparent request forwarding
-- Windows service mode with system tray icon (🦙🔒)
+- **WinSW-based Windows service** for modern, reliable background operation
 
 ## Troubleshooting
 
@@ -297,22 +314,35 @@ netstat -an | findstr :11434
 taskkill /f /im ollama.exe
 ```
 
+**Existing Ollama Installation**:
+If you already have Ollama running or set to auto-start:
+- The installer will detect this and ask to stop Ollama
+- Auto-start settings will be disabled during installation
+- These are automatically restored when you uninstall
+- If you prefer manual control, disable Ollama auto-start before installing:
+  - Open Task Manager → Startup tab → Disable Ollama
+  - Or remove from Windows Services if installed as service
+
 **Python Issues**:
 ```bash
 # Verify Python installation
 python --version
 # Install dependencies
-pip install aiohttp prometheus-client
+pip install fastapi uvicorn httpx prometheus-client
 ```
 
 **Windows Service Issues**:
 ```bash
 # Check service status
-.\service_manager.ps1 status
+sc query OllamaMetricsProxy
 # View service logs
-type %TEMP%\ollama_service\ollama_service.log
+type %TEMP%\ollama_service\ollama_runner.log
 # Test without installing
-python ollama_service.py
+python ollama_runner.py
+
+# WinSW-based service is more reliable than pywin32
+# If service fails to start, check Windows Event Logs for details
+# Verify Python is accessible from Windows services
 ```
 
 **Connectivity Testing**:

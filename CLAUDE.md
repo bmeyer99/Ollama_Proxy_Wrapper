@@ -14,11 +14,16 @@ This is a transparent metrics proxy for Ollama that adds Prometheus monitoring a
 quick_install.bat
 
 # Manual installation of dependencies
-pip install aiohttp prometheus-client
+pip install aiohttp prometheus-client requests
 
 # Windows Service Installation (runs on startup)
-install_service.bat           # Run as Administrator
-.\service_manager.ps1 install # PowerShell alternative
+.\Install-Service.ps1         # PowerShell (Run as Administrator)
+
+# WinSW-based service installation:
+# - Downloads WinSW automatically
+# - Uses clean Python runner (no pywin32 complexity)
+# - Handles existing Ollama processes and auto-start
+# - Saves settings for restoration on uninstall
 ```
 
 ### Running the Proxy
@@ -38,9 +43,10 @@ python ollama_wrapper.py list
 python ollama_wrapper.py ps
 
 # Windows Service Mode (background, no terminal)
-.\service_manager.ps1 start   # Start service
-.\service_manager.ps1 status  # Check status
-.\service_manager.ps1 test    # Test in console mode
+net start OllamaMetricsProxy   # Start service
+net stop OllamaMetricsProxy    # Stop service
+sc query OllamaMetricsProxy    # Check status
+python ollama_runner.py        # Test in console mode
 ```
 
 ### Testing and Debugging
@@ -79,7 +85,8 @@ netstat -an | findstr :11435
    - Launches metrics proxy on port 11434 (default Ollama port)
    - Handles command routing and process coordination
 
-2. **ollama_hybrid_proxy.py** - Asynchronous proxy server with dual collection
+2. **ollama_fastapi_proxy.py** - FastAPI-based proxy server with dual collection
+   - **Python 3.13 compatible**: Uses FastAPI + httpx instead of aiohttp
    - **Prometheus metrics**: Low-cardinality histograms for monitoring
    - **Analytics storage**: High-detail records for analysis
    - Supports multiple backends (JSONL, SQLite, Loki)
@@ -94,11 +101,23 @@ netstat -an | findstr :11435
    - Configurable backends with automatic cleanup
    - Supports JSONL (compressed), SQLite (searchable), and Loki integration
 
-5. **ollama_service.py** - Windows service wrapper for background operation
-   - Runs proxy as Windows service (starts on boot)
-   - System tray icon with status monitoring (🦙🔒)
-   - Service management via install/uninstall scripts
-   - Automatic process lifecycle management
+5. **ollama_runner.py** - Clean Python runner for Windows service
+   - Simple process management without Windows service framework complexity
+   - Used by WinSW for reliable Windows service operation
+   - Signal handling for graceful shutdown
+   - Background logging to temp directory
+
+6. **WinSW Integration** - Modern Windows service management
+   - Uses WinSW (Windows Service Wrapper) instead of pywin32
+   - Eliminates module import issues common with pywin32
+   - Automatic download and configuration
+   - Better service reliability and management
+
+7. **OllamaManager.psm1** - PowerShell module for Ollama conflict resolution
+   - Detects running Ollama processes and auto-start configurations
+   - Safely stops Ollama and disables auto-start during installation
+   - Backs up settings and restores them on uninstall
+   - Handles Task Scheduler, Registry, Startup folder, and Service entries
 
 ### Request Flow
 ```
@@ -133,7 +152,7 @@ User App → :11434 (Proxy) → :11435 (Ollama)
 ## Development Notes
 
 ### Adding New Metrics
-1. Add Prometheus metric definition in `ollama_hybrid_proxy.py` (lines 36-79)
+1. Add Prometheus metric definition in `ollama_fastapi_proxy.py` (lines 36-79)
 2. Update `record_interaction` method to populate the metric
 3. Consider cardinality impact and use categorization if needed
 
@@ -151,12 +170,14 @@ User App → :11434 (Proxy) → :11435 (Ollama)
 Dependencies are minimal and focused on core functionality:
 - `aiohttp`: Async HTTP client/server for the proxy
 - `prometheus-client`: Metrics collection and exposition
+- `requests`: HTTP library for API calls
 - `sqlite3`: Built-in Python module for analytics storage
 - Standard library modules: `asyncio`, `json`, `time`, `pathlib`, etc.
+- **WinSW**: Windows Service Wrapper (downloaded automatically)
 
 Install dependencies:
 ```bash
-pip install aiohttp prometheus-client
+pip install fastapi uvicorn httpx prometheus-client requests
 ```
 
 ### Troubleshooting Common Issues
@@ -168,7 +189,7 @@ pip install aiohttp prometheus-client
 
 #### Python Import Errors
 - **Issue**: "ImportError: No module named 'aiohttp'"
-- **Solution**: Install dependencies with `pip install aiohttp prometheus-client`
+- **Solution**: Install dependencies with `pip install aiohttp prometheus-client requests`
 - **Check**: Verify Python environment and PATH
 
 #### Ollama Connection Issues
@@ -176,7 +197,22 @@ pip install aiohttp prometheus-client
 - **Solution**: Verify Ollama is installed and accessible
 - **Check**: Test `ollama --version` directly
 
+#### Existing Ollama Installation Conflicts
+- **Issue**: Ollama already running or auto-starting at login
+- **Solution**: The installer handles this automatically by:
+  - Detecting and stopping running Ollama processes
+  - Finding auto-start entries (Task Scheduler, Registry, Services)
+  - Disabling them temporarily and backing up settings
+  - Restoring original settings on uninstall
+- **Manual Fix**: If needed, disable Ollama auto-start via Task Manager → Startup tab
+
 #### Analytics Backend Issues
 - **Issue**: SQLite search returns empty results
 - **Solution**: Ensure `ANALYTICS_BACKEND=sqlite` is set before starting
 - **Check**: Verify database file exists in `ANALYTICS_DIR`
+
+#### WinSW Service Issues
+- **Issue**: Service fails to start or install
+- **Solution**: Check Windows Event Logs for detailed error messages
+- **Check**: Verify Python is accessible from Windows services
+- **Debug**: Run `python ollama_runner.py` manually to test functionality

@@ -76,10 +76,10 @@ if (-not (Test-Path $wrapperPath)) {
     exit $LASTEXITCODE
 }
 
-# Check for hybrid proxy script
-$proxyPath = Join-Path $SCRIPT_DIR "ollama_hybrid_proxy.py"
+# Check for FastAPI proxy script
+$proxyPath = Join-Path $SCRIPT_DIR "ollama_fastapi_proxy.py"
 if (-not (Test-Path $proxyPath)) {
-    Write-Host "Error: ollama_hybrid_proxy.py not found" -ForegroundColor Red
+    Write-Host "Error: ollama_fastapi_proxy.py not found" -ForegroundColor Red
     Write-Host "Please ensure all files are in the same directory" -ForegroundColor Yellow
     exit 1
 }

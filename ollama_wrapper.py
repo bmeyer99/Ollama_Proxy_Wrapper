@@ -20,9 +20,9 @@ from pathlib import Path
 # Import the hybrid proxy (make sure it's in the same directory)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from ollama_hybrid_proxy import HybridOllamaProxy
+    from ollama_fastapi_proxy import FastAPIOllamaProxy
 except ImportError:
-    print("Error: ollama_hybrid_proxy.py must be in the same directory as this script")
+    print("Error: ollama_fastapi_proxy.py must be in the same directory as this script")
     print(f"Current directory: {os.path.dirname(os.path.abspath(__file__))}")
     sys.exit(1)
 
@@ -51,11 +51,11 @@ def wait_for_ollama(port, timeout=STARTUP_TIMEOUT):
     while time.time() - start_time < timeout:
         # First check if port is open
         if is_port_open(port):
-            print(f"✓ Port {port} is open, testing API...")
+            print(f"[OK] Port {port} is open, testing API...")
             try:
                 response = requests.get(f'http://localhost:{port}/api/tags', timeout=2)
                 if response.status_code == 200:
-                    print(f"✓ Ollama is ready on port {port}")
+                    print(f"[OK] Ollama is ready on port {port}")
                     return True
                 else:
                     print(f"Port {port} open but API returned {response.status_code}")
@@ -65,7 +65,7 @@ def wait_for_ollama(port, timeout=STARTUP_TIMEOUT):
             print(f"Waiting for port {port} to open...")
         time.sleep(1)
     
-    print(f"✗ Timeout waiting for Ollama on port {port}")
+    print(f"[ERROR] Timeout waiting for Ollama on port {port}")
     return False
 
 def run_passthrough_command(args):
@@ -246,7 +246,7 @@ def start_proxy():
     print(f"Starting metrics proxy on port {PROXY_PORT}...")
     
     # Create and run the proxy
-    proxy = HybridOllamaProxy(
+    proxy = FastAPIOllamaProxy(
         ollama_host=f'http://localhost:{OLLAMA_REAL_PORT}',
         proxy_port=PROXY_PORT,
         analytics_backend='sqlite'  # or 'jsonl'

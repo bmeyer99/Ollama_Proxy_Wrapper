@@ -4,12 +4,12 @@ This guide explains how to run the Ollama Metrics Proxy as a Windows service tha
 
 ## Quick Start
 
-### Option 1: Batch Files (Simple)
-1. **Install**: Right-click `install_service.bat` → Run as administrator
-2. **Uninstall**: Right-click `uninstall_service.bat` → Run as administrator  
-3. **Test**: Double-click `test_service.bat` (runs in console mode)
+### Option 1: PowerShell Scripts (Recommended)
+1. **Install**: Right-click `Install-Service.ps1` → Run with PowerShell (as administrator)
+2. **Uninstall**: Right-click `Uninstall-Service.ps1` → Run with PowerShell (as administrator)
+3. **Test**: Run `service_manager.ps1 test` from PowerShell
 
-### Option 2: PowerShell (Advanced)
+### Option 2: Service Manager Script (Advanced)
 ```powershell
 # Install and start service
 .\service_manager.ps1 install
@@ -131,7 +131,8 @@ This starts the service in the foreground with a system tray icon, perfect for t
 ## Uninstalling
 
 ### Complete Removal
-1. Run `uninstall_service.bat` as administrator
+1. Run `Uninstall-Service.ps1` as administrator
+   - Or use: `.\service_manager.ps1 uninstall`
 2. Optionally remove Python packages:
    ```bash
    pip uninstall pywin32 aiohttp prometheus-client

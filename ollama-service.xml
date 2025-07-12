@@ -1,0 +1,49 @@
+<service>
+  <id>OllamaMetricsProxy</id>
+  <name>Ollama Metrics Proxy</name>
+  <description>Transparent metrics proxy for Ollama with Prometheus monitoring</description>
+  
+  <!-- Service executable -->
+  <executable>PYTHON_PATH_PLACEHOLDER</executable>
+  <arguments>"%BASE%\ollama_runner.py"</arguments>
+  
+  <!-- Working directory -->
+  <workingdirectory>%BASE%</workingdirectory>
+  
+  <!-- Service startup -->
+  <startmode>Automatic</startmode>
+  <delayedAutoStart>false</delayedAutoStart>
+  
+  <!-- Logging -->
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  
+  <!-- Environment variables -->
+  <env name="ANALYTICS_BACKEND" value="sqlite"/>
+  <env name="ANALYTICS_DIR" value="%BASE%\ollama_analytics"/>
+  <env name="ANALYTICS_RETENTION_DAYS" value="7"/>
+  <env name="OLLAMA_EXECUTABLE" value="OLLAMA_PATH_PLACEHOLDER"/>
+  
+  <!-- Security -->
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>NetworkService</user>
+    <allowservicelogon>true</allowservicelogon>
+  </serviceaccount>
+  
+  <!-- Failure recovery -->
+  <onfailure action="restart" delay="60 sec"/>
+  <onfailure action="restart" delay="120 sec"/>
+  <onfailure action="restart" delay="300 sec"/>
+  <resetfailure>1 day</resetfailure>
+  
+  <!-- Dependencies -->
+  <depend>Tcpip</depend>
+  
+  <!-- Stop configuration -->
+  <stopparentprocessfirst>false</stopparentprocessfirst>
+  <stoptimeout>30 sec</stoptimeout>
+  <stopmode>graceful</stopmode>
+</service>

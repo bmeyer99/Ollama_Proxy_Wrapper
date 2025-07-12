@@ -67,7 +67,7 @@ groups:
 
 ### Step 1: Extend Proxy API
 
-Add these endpoints to `ollama_hybrid_proxy.py`:
+Add these endpoints to `ollama_fastapi_proxy.py`:
 
 ```python
 # Add to OllamaHybridProxy class
