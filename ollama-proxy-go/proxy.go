@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,11 +33,36 @@ func NewProxy(targetURL string, port int) *Proxy {
 		log.Fatalf("Invalid target URL: %v", err)
 	}
 
+	// Determine analytics directory based on execution context
+	analyticsDir := filepath.Join(".", "ollama_analytics")
+	
+	// When running as a service, use a proper data directory
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		// Check if we're running from System32 (service context)
+		if strings.Contains(strings.ToLower(exeDir), "system32") {
+			// Use ProgramData for service data
+			programData := os.Getenv("ProgramData")
+			if programData == "" {
+				programData = "C:\\ProgramData"
+			}
+			analyticsDir = filepath.Join(programData, "OllamaProxy", "analytics")
+		} else {
+			// Use directory relative to executable
+			analyticsDir = filepath.Join(exeDir, "ollama_analytics")
+		}
+	}
+	
+	// Ensure directory exists
+	if err := os.MkdirAll(analyticsDir, 0755); err != nil {
+		log.Printf("Warning: Failed to create analytics directory %s: %v", analyticsDir, err)
+	}
+	
 	p := &Proxy{
 		target:    target,
 		port:      port,
 		metrics:   NewMetricsCollector(),
-		analytics: NewAnalyticsWriter("sqlite", filepath.Join(".", "ollama_analytics")),
+		analytics: NewAnalyticsWriter("sqlite", analyticsDir),
 	}
 
 	// Create custom transport with proper timeouts for Ollama
@@ -46,12 +72,21 @@ func NewProxy(targetURL string, port int) *Proxy {
 		IdleConnTimeout:     90 * time.Second,
 		DisableCompression:  true, // Let Ollama handle compression
 		ForceAttemptHTTP2:   false,
+		// Add explicit timeouts for service reliability
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second, // Give Ollama time to start processing
+		ExpectContinueTimeout: 1 * time.Second,
 	}
 
 	// Create reverse proxy with custom director
 	p.reverseProxy = &httputil.ReverseProxy{
 		Transport: transport,
-		FlushInterval: -1, // Flush immediately for streaming
+		FlushInterval: 10 * time.Millisecond, // Small flush interval for streaming (not -1 which can cause issues in service mode)
+		BufferPool: nil, // Use default buffer pool
 		Director: func(req *http.Request) {
 			// Save original host before modification
 			originalHost := req.Host
@@ -71,6 +106,7 @@ func NewProxy(targetURL string, port int) *Proxy {
 			req.Header.Set("X-Forwarded-Host", originalHost)
 			req.Header.Set("X-Forwarded-Proto", "http")
 			
+			// Log the final request being sent
 			// Optional: Log the final request being sent
 			log.Printf("Director: Forwarding to %s%s", req.URL.Host, req.URL.Path)
 		},
@@ -165,14 +201,35 @@ func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Store context for response processing
 	r = r.WithContext(withProxyContext(r.Context(), ctx))
 
+	// Create a response writer wrapper to ensure flushing
+	wrapped := &responseWriterWrapper{
+		ResponseWriter: w,
+		serviceMode:    IsRunningAsService(),
+	}
+	
 	// Forward the request
-	p.reverseProxy.ServeHTTP(w, r)
+	p.reverseProxy.ServeHTTP(wrapped, r)
+	
+	// Ensure final flush in service mode
+	if wrapped.serviceMode {
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
 }
 
 // modifyResponse intercepts and modifies the response for metrics
 func (p *Proxy) modifyResponse(resp *http.Response) error {
+	// Log response received from upstream
+	if IsRunningAsService() {
+		LogPrintf("modifyResponse: Got response %d from upstream for %s", resp.StatusCode, resp.Request.URL.Path)
+	}
+	
 	ctx := getProxyContext(resp.Request.Context())
 	if ctx == nil {
+		if IsRunningAsService() {
+			LogPrintf("WARNING: No proxy context found for response")
+		}
 		return nil
 	}
 
@@ -397,6 +454,23 @@ func (p *Proxy) handleTest(w http.ResponseWriter, r *http.Request) {
 		"ollama_reachable": true,
 		"models":           models,
 	})
+}
+
+// responseWriterWrapper ensures proper flushing in service mode
+type responseWriterWrapper struct {
+	http.ResponseWriter
+	serviceMode bool
+}
+
+func (w *responseWriterWrapper) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	// In service mode, flush after each write for streaming responses
+	if w.serviceMode && n > 0 {
+		if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
+	return n, err
 }
 
 // streamingResponseBody wraps the response body for streaming metrics collection

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -21,11 +23,34 @@ type OllamaProcess struct {
 
 // Stop terminates the Ollama process
 func (op *OllamaProcess) Stop() {
-	if op != nil && op.cmd != nil && op.cmd.Process != nil {
+	if op == nil || op.cmd == nil || op.cmd.Process == nil {
+		return
+	}
+	
+	log.Printf("Stopping Ollama process (PID: %d)", op.cmd.Process.Pid)
+	
+	// On Windows, we need to kill the process tree
+	if runtime.GOOS == "windows" {
+		// Use taskkill to kill the process and all its children
+		killCmd := exec.Command("taskkill", "/F", "/T", "/PID", fmt.Sprintf("%d", op.cmd.Process.Pid))
+		if output, err := killCmd.CombinedOutput(); err != nil {
+			log.Printf("Failed to kill process tree with taskkill: %v - %s", err, output)
+			// Fallback to regular kill
+			if err := op.cmd.Process.Kill(); err != nil {
+				log.Printf("Failed to kill process: %v", err)
+			}
+		} else {
+			log.Printf("Successfully killed Ollama process tree")
+		}
+	} else {
+		// On Unix-like systems, use regular kill
 		if err := op.cmd.Process.Kill(); err != nil {
 			log.Printf("Failed to kill process: %v", err)
 		}
 	}
+	
+	// Wait for process to exit
+	op.cmd.Wait()
 }
 
 // findOllamaExecutable locates the ollama executable
@@ -176,6 +201,43 @@ func startOllama(ollamaPath string, port int) (*OllamaProcess, error) {
 	log.Printf("Starting Ollama server on port %d", port)
 	cmd := exec.Command(ollamaPath, "serve")
 	cmd.Env = env
+	
+	// Configure Windows-specific process attributes
+	configureCommand(cmd)
+	
+	// Capture output when running as service
+	if IsRunningAsService() && ServiceLogger != nil {
+		// Create pipes for stdout and stderr
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+		}
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+		}
+		
+		// Start goroutines to read output
+		go func() {
+			scanner := bufio.NewScanner(stdout)
+			for scanner.Scan() {
+				ServiceLogger.Printf("[Ollama stdout] %s", scanner.Text())
+			}
+			if err := scanner.Err(); err != nil && err != io.EOF {
+				ServiceLogger.Printf("[Ollama stdout] Read error: %v", err)
+			}
+		}()
+		
+		go func() {
+			scanner := bufio.NewScanner(stderr)
+			for scanner.Scan() {
+				ServiceLogger.Printf("[Ollama stderr] %s", scanner.Text())
+			}
+			if err := scanner.Err(); err != nil && err != io.EOF {
+				ServiceLogger.Printf("[Ollama stderr] Read error: %v", err)
+			}
+		}()
+	}
 	
 	// Start the process
 	if err := cmd.Start(); err != nil {
