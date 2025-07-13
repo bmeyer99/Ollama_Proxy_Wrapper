@@ -4,164 +4,157 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a transparent metrics proxy for Ollama that adds Prometheus monitoring and analytics collection without requiring changes to existing applications. The proxy intercepts API calls, collects metrics, and forwards requests to Ollama.
+This is the **Ollama Metrics Proxy** - a transparent HTTP reverse proxy for Ollama that adds Prometheus metrics collection and analytics without requiring changes to existing applications. The proxy intercepts all API calls to Ollama and collects detailed metrics while forwarding requests seamlessly.
 
-## Key Commands
+**Key Architecture:**
+- Proxy listens on port 11434 (default Ollama port) 
+- Ollama runs on port 11435 (hidden from users)
+- All requests flow: `Client → :11434 (Proxy) → :11435 (Ollama)`
+- Metrics collected via Prometheus + SQLite analytics storage
 
-### Installation and Setup
-```bash
-# Quick setup (Windows)
-quick_install.bat
+## Common Development Commands
 
-# Manual installation of dependencies
-pip install aiohttp prometheus-client
+# Windows batch build script
+./build.bat
+
+# Quick build (Windows)
+./quick-build.bat
 ```
 
-### Running the Proxy
+### Testing
 ```bash
-# Start with metrics collection
-python ollama_wrapper.py serve
+# Test basic functionality
+ollama-proxy.exe serve
 
-# Run a specific model with metrics
-python ollama_wrapper.py run phi4
-
-# Using convenience launchers
-ollama_metrics.bat run phi4    # Windows batch
-.\ollama.ps1 run phi4          # PowerShell
-
-# Simple commands (bypass proxy)
-python ollama_wrapper.py list
-python ollama_wrapper.py ps
-```
-
-### Testing and Debugging
-```bash
-# Test setup
-python ollama_wrapper.py --version
-
-# Check connectivity and proxy status
+# Test proxy connectivity
 curl http://localhost:11434/test
 
-# View metrics
+# Test metrics endpoint
 curl http://localhost:11434/metrics
 
-# Check analytics stats
+# Test analytics API
 curl http://localhost:11434/analytics/stats
-
-# Search analytics (SQLite backend only)
-curl "http://localhost:11434/analytics/search?model=phi4"
-curl "http://localhost:11434/analytics/search?prompt_search=summarize"
-curl "http://localhost:11434/analytics/search?start_time=1640995200&end_time=1641081600"
-
-# Test Ollama connectivity through the proxy
-curl -X POST http://localhost:11434/api/tags
-
-# Check if ports are available
-netstat -an | findstr :11434
-netstat -an | findstr :11435
 ```
 
-## Architecture
+### Service Management (Windows)
+```powershell
+# Install as Windows service (requires admin)
+./Install-Service.ps1
 
-### Core Components
+# Install via launcher (auto-elevates)
+./install-service-launcher.bat
 
-1. **ollama_wrapper.py** - Main entry point that manages Ollama process lifecycle
-   - Starts Ollama on port 11435 (hidden from users)
-   - Launches metrics proxy on port 11434 (default Ollama port)
-   - Handles command routing and process coordination
+# Uninstall service
+./Uninstall-Service.ps1
 
-2. **ollama_hybrid_proxy.py** - Asynchronous proxy server with dual collection
-   - **Prometheus metrics**: Low-cardinality histograms for monitoring
-   - **Analytics storage**: High-detail records for analysis
-   - Supports multiple backends (JSONL, SQLite, Loki)
-
-3. **PromptCategorizer** - Categorizes prompts to limit metric cardinality
-   - Pattern-based classification (summarize, translate, code, etc.)
-   - Prevents metric explosion from unique prompts
-   - Max 50 categories to maintain Prometheus efficiency
-
-4. **AnalyticsWriter** - Background analytics storage with async queue
-   - Thread-safe writing to prevent blocking proxy
-   - Configurable backends with automatic cleanup
-   - Supports JSONL (compressed), SQLite (searchable), and Loki integration
-
-### Request Flow
-```
-User App → :11434 (Proxy) → :11435 (Ollama)
-              ↓
-         Metrics + Analytics Collection
+# Manual service commands
+sc start OllamaMetricsProxy
+sc stop OllamaMetricsProxy
 ```
 
-### Configuration Environment Variables
-- `ANALYTICS_BACKEND`: Storage backend (jsonl, sqlite, loki)
-- `ANALYTICS_DIR`: Storage directory (default: ./ollama_analytics)  
-- `ANALYTICS_RETENTION_DAYS`: Data retention period (default: 7)
-- `OLLAMA_HOST`: Set by wrapper to control Ollama server binding (internal use)
+## Core Architecture
 
-## Key Design Patterns
+### Main Components
+- **main.go**: CLI entry point, handles command routing and port management
+- **proxy.go**: HTTP reverse proxy with metrics collection and streaming support
+- **metrics.go**: Prometheus metrics definitions and categorization logic
+- **analytics.go**: SQLite analytics storage with search/export capabilities
+- **ollama.go**: Ollama process management and executable discovery
+- **service.go**: Windows service implementation with proper logging
+- **context.go**: Request context for metrics correlation across streaming responses
 
-### Metrics Collection Strategy
-- **Prometheus**: Aggregated metrics with limited cardinality for dashboards
-- **Analytics**: Full-detail storage for debugging and analysis
-- **Prompt categorization**: Prevents metric explosion from unique prompts
+### Service vs Console Mode
+The application automatically detects execution context:
+- **Console mode**: Direct execution via `ollama-proxy.exe serve`
+- **Service mode**: Background Windows service via `-service` flag
+- Service mode uses file logging, console mode uses stdout
 
-### Port Management
-- **11434**: Proxy port (appears as standard Ollama to clients)
-- **11435**: Actual Ollama port (hidden from users)
-- Automatic port conflict detection and cleanup
+### Platform-Specific Files
+- **logging_windows.go**: Windows-specific file logging for service mode
+- **logging_other.go**: Unix/console logging fallback
+- **ollama_windows.go**: Windows process management (taskkill, etc.)
+- **ollama_other.go**: Unix process management fallback
+
+## Key Development Patterns
+
+### Metrics Collection
+- Prometheus metrics use controlled cardinality via `PromptCategorizer`
+- Analytics records are comprehensive with full request/response context
+- Streaming responses are handled via `streamingResponseBody` wrapper
+- Metrics recorded at request completion, not during streaming
 
 ### Error Handling
-- Graceful fallback for missing dependencies
-- Transparent passthrough for simple commands
-- Comprehensive logging and error propagation
+- Service mode errors logged to files + Windows Event Log
+- Console mode errors to stdout with user-friendly messages
+- Graceful degradation when Ollama unavailable
+- Port conflict detection with clear error messages
 
-## Development Notes
+### Configuration
+Environment variables for service behavior:
+- `OLLAMA_HOST`: Backend Ollama address (default: 0.0.0.0:11435)
+- `ANALYTICS_BACKEND`: Storage type (sqlite/jsonl/none)
+- `ANALYTICS_DIR`: Analytics storage directory
+- `ANALYTICS_RETENTION_DAYS`: Data retention period
 
-### Adding New Metrics
-1. Add Prometheus metric definition in `ollama_hybrid_proxy.py` (lines 36-79)
-2. Update `record_interaction` method to populate the metric
-3. Consider cardinality impact and use categorization if needed
+### Cross-Platform Considerations
+- Build tags separate Windows service code (`//go:build windows`)
+- Service detection via executable path and interactive session checks
+- Windows-specific process management for reliable Ollama lifecycle
 
-### Analytics Backend Extension
-1. Implement new backend in `AnalyticsWriter._write_record`
-2. Add initialization logic in `AnalyticsWriter.__init__`
-3. Update configuration validation
+## Testing Guidelines
 
-### Command Extensions
-1. Add new commands to `PASSTHROUGH_COMMANDS` if they don't need metrics
-2. Update command routing logic in `ollama_wrapper.py:main()`
-3. Consider PowerShell wrapper updates for Windows integration
+### Manual Testing Flow
+1. Build the executable
+2. Verify Ollama is installed and accessible
+3. Test console mode: `ollama-proxy.exe serve`
+4. Verify proxy responds on port 11434
+5. Test metrics endpoint returns Prometheus format
+6. Test analytics endpoints return valid JSON
+7. For service mode, test installation and service lifecycle
 
-### Dependencies and Requirements
-Dependencies are minimal and focused on core functionality:
-- `aiohttp`: Async HTTP client/server for the proxy
-- `prometheus-client`: Metrics collection and exposition
-- `sqlite3`: Built-in Python module for analytics storage
-- Standard library modules: `asyncio`, `json`, `time`, `pathlib`, etc.
+### Common Issues to Test
+- Port 11434 already in use (existing Ollama)
+- Ollama not found in PATH
+- Service startup failures (check Windows Event Log)
+- Streaming response handling
+- Analytics database corruption recovery
 
-Install dependencies:
-```bash
-pip install aiohttp prometheus-client
-```
+## Analytics Schema
 
-### Troubleshooting Common Issues
+The SQLite analytics table (`interactions`) stores:
+- Request metadata (model, endpoint, client IP)
+- Performance metrics (duration, tokens/sec, load time)
+- Content samples (prompt preview, response preview)
+- Error tracking and status codes
 
-#### Port Conflicts
-- **Issue**: "Port 11434 is already in use"
-- **Solution**: Stop existing Ollama instances or change ports in configuration
-- **Check**: Use `netstat -an | findstr :11434` to see what's using the port
+### Key Analytics Endpoints
+- `/analytics` - Web dashboard
+- `/analytics/stats` - Basic statistics API
+- `/analytics/search` - Query interface with filters
+- `/analytics/export` - JSON/CSV export functionality
 
-#### Python Import Errors
-- **Issue**: "ImportError: No module named 'aiohttp'"
-- **Solution**: Install dependencies with `pip install aiohttp prometheus-client`
-- **Check**: Verify Python environment and PATH
+## Security Considerations
 
-#### Ollama Connection Issues
-- **Issue**: "Ollama failed to start"
-- **Solution**: Verify Ollama is installed and accessible
-- **Check**: Test `ollama --version` directly
+- Service runs as LocalSystem for Ollama management privileges
+- Analytics data stored locally (no network transmission)
+- Content previews are truncated to prevent storage bloat
+- Client IP tracking for usage analysis (not authentication)
 
-#### Analytics Backend Issues
-- **Issue**: SQLite search returns empty results
-- **Solution**: Ensure `ANALYTICS_BACKEND=sqlite` is set before starting
-- **Check**: Verify database file exists in `ANALYTICS_DIR`
+## Build Dependencies
+
+### Runtime Dependencies
+- None (single executable)
+
+### Build Dependencies  
+- Go 1.21+
+- `github.com/prometheus/client_golang` - Metrics
+- `golang.org/x/sys/windows` - Service support (Windows only)
+- `modernc.org/sqlite` - Analytics storage
+
+## Development Tips
+
+- Use `LogPrintf()` for service-compatible logging
+- Test both console and service modes for any proxy changes
+- Streaming response changes require testing with actual Ollama models
+- Analytics schema changes need migration logic in `initSQLite()`
+- Prometheus metric changes should consider cardinality impact

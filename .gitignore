@@ -1,0 +1,62 @@
+# Binaries
+ollama-proxy.exe
+ollama-proxy
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go build outputs
+*.test
+*.prof
+
+# Go modules cache
+go.sum
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows service files (generated at runtime)
+winsw.exe
+OllamaMetricsProxy.exe
+OllamaMetricsProxy.xml
+
+# Analytics and log directories
+ollama_analytics/
+logs/
+*.log
+*.db
+*.sqlite
+
+# Windows service logs
+OllamaMetricsProxy.out.log
+OllamaMetricsProxy.err.log
+OllamaMetricsProxy.wrapper.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Environment files
+.env
+.env.local
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Crash logs
+crash.log

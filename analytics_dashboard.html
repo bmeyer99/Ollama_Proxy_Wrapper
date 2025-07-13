@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama Analytics Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .message-row:hover { background-color: rgba(59, 130, 246, 0.1); }
+        .chart-container { position: relative; height: 300px; }
+        .modal-backdrop { background-color: rgba(0, 0, 0, 0.5); }
+        .syntax-highlight { background-color: #f3f4f6; padding: 1rem; border-radius: 0.5rem; }
+        .timeline-tooltip { 
+            position: absolute; 
+            background: white; 
+            border: 1px solid #e5e7eb; 
+            padding: 8px; 
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            pointer-events: none;
+            z-index: 50;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="min-h-screen">
+        <!-- Header -->
+        <header class="bg-white shadow-sm border-b">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center py-4">
+                    <h1 class="text-2xl font-bold text-gray-900">
+                        <i class="fas fa-chart-line text-blue-600 mr-2"></i>
+                        Ollama Analytics Explorer
+                    </h1>
+                    <div class="flex items-center space-x-4">
+                        <button onclick="refreshData()" class="text-gray-600 hover:text-gray-900">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        <span class="text-sm text-gray-500" id="lastUpdate">Last updated: Never</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Search & Filters -->
+        <div class="bg-white border-b">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                <div class="flex flex-wrap gap-4 items-center">
+                    <div class="flex-1 min-w-[300px]">
+                        <div class="relative">
+                            <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                            <input type="text" id="searchInput" placeholder="Search prompts or responses..." 
+                                class="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        </div>
+                    </div>
+                    
+                    <select id="modelFilter" class="px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                        <option value="">All Models</option>
+                    </select>
+                    
+                    <select id="timeRangeFilter" class="px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                        <option value="10m">Last 10 minutes</option>
+                        <option value="1h" selected>Last hour</option>
+                        <option value="24h">Last 24 hours</option>
+                        <option value="7d">Last 7 days</option>
+                        <option value="custom">Custom range</option>
+                    </select>
+                    
+                    <select id="statusFilter" class="px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                        <option value="">All Status</option>
+                        <option value="success">Success</option>
+                        <option value="error">Error</option>
+                        <option value="timeout">Timeout</option>
+                    </select>
+                    
+                    <button onclick="toggleAdvancedFilters()" class="px-4 py-2 text-blue-600 hover:text-blue-800">
+                        <i class="fas fa-filter mr-2"></i>Advanced
+                    </button>
+                    
+                    <button onclick="applyFilters()" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        Apply
+                    </button>
+                </div>
+                
+                <!-- Advanced Filters (Hidden by default) -->
+                <div id="advancedFilters" class="hidden mt-4 p-4 bg-gray-50 rounded-lg">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Min Input Tokens</label>
+                            <input type="number" id="minInputTokens" class="w-full px-3 py-2 border rounded-lg">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Max Input Tokens</label>
+                            <input type="number" id="maxInputTokens" class="w-full px-3 py-2 border rounded-lg">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Min Latency (ms)</label>
+                            <input type="number" id="minLatency" class="w-full px-3 py-2 border rounded-lg">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Max Latency (ms)</label>
+                            <input type="number" id="maxLatency" class="w-full px-3 py-2 border rounded-lg">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Total Requests</p>
+                            <p class="text-2xl font-bold text-gray-900" id="totalRequests">0</p>
+                        </div>
+                        <div class="text-blue-600">
+                            <i class="fas fa-comments text-3xl"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Requests per Minute</p>
+                            <p class="text-2xl font-bold text-gray-900" id="requestsPerMinute">0</p>
+                        </div>
+                        <div class="text-green-600">
+                            <i class="fas fa-tachometer-alt text-3xl"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Unique IPs</p>
+                            <p class="text-2xl font-bold text-gray-900" id="uniqueIPs">0</p>
+                        </div>
+                        <div class="text-purple-600">
+                            <i class="fas fa-users text-3xl"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Tokens per Second</p>
+                            <p class="text-2xl font-bold text-gray-900" id="tokensPerSecond">0</p>
+                        </div>
+                        <div class="text-yellow-600">
+                            <i class="fas fa-bolt text-3xl"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance Insights -->
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Top IPs -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Top IPs by Requests</h3>
+                    <div id="topIPsList" class="space-y-2">
+                        <!-- Dynamic content -->
+                    </div>
+                </div>
+                
+                <!-- Top Models -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Top Models</h3>
+                    <div id="topModelsList" class="space-y-2">
+                        <!-- Dynamic content -->
+                    </div>
+                </div>
+                
+                <!-- Success Rate -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Performance Metrics</h3>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Success Rate</span>
+                            <span class="font-medium" id="successRate">0%</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Error Rate</span>
+                            <span class="font-medium text-red-600" id="errorRate">0%</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Avg Response Time</span>
+                            <span class="font-medium" id="avgResponseTime">0ms</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Interactive Charts -->
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Message Timeline -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Message Timeline</h3>
+                    <div class="chart-container">
+                        <canvas id="timelineChart"></canvas>
+                    </div>
+                </div>
+                
+                <!-- Prompt Category Distribution -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Prompt Categories</h3>
+                    <div class="chart-container">
+                        <canvas id="categoryChart"></canvas>
+                    </div>
+                </div>
+                
+                <!-- Token Usage Scatter -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Token Usage Distribution</h3>
+                    <div class="chart-container">
+                        <canvas id="tokenScatterChart"></canvas>
+                    </div>
+                </div>
+                
+                <!-- Response Time Distribution -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Response Time Distribution</h3>
+                    <div class="chart-container">
+                        <canvas id="latencyHistogram"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Message Explorer Table -->
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div class="bg-white rounded-lg shadow">
+                <div class="px-6 py-4 border-b">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-lg font-semibold">Message Explorer</h3>
+                        <div class="flex items-center space-x-4">
+                            <span class="text-sm text-gray-500">
+                                Showing <span id="showingCount">0</span> of <span id="totalCount">0</span> messages
+                            </span>
+                            <button onclick="exportData()" class="text-blue-600 hover:text-blue-800">
+                                <i class="fas fa-download mr-2"></i>Export
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="overflow-x-auto">
+                    <table class="min-w-full">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('timestamp')">
+                                    Time <i class="fas fa-sort"></i>
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Model
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    User
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Prompt Preview
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('tokens')">
+                                    Tokens <i class="fas fa-sort"></i>
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" onclick="sortTable('latency')">
+                                    Latency <i class="fas fa-sort"></i>
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody id="messageTableBody" class="bg-white divide-y divide-gray-200">
+                            <!-- Messages will be dynamically inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="px-6 py-4 border-t">
+                    <button onclick="loadMore()" class="w-full py-2 text-blue-600 hover:text-blue-800 font-medium">
+                        Load More
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Message Detail Modal -->
+    <div id="messageModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="modal-backdrop fixed inset-0" onclick="closeModal()"></div>
+            
+            <div class="bg-white rounded-lg shadow-xl z-50 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+                <div class="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+                    <h2 class="text-xl font-semibold">Message Details</h2>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+                
+                <div id="modalContent" class="p-6">
+                    <!-- Content will be dynamically inserted -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let messages = [];
+        let filteredMessages = [];
+        let charts = {};
+        let currentPage = 0;
+        const pageSize = 50;
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', async () => {
+            await initializeDashboard();
+            setInterval(refreshData, 30000); // Auto-refresh every 30 seconds
+        });
+
+        async function initializeDashboard() {
+            await loadModels();
+            await refreshData();
+            initializeCharts();
+        }
+
+        async function loadModels() {
+            try {
+                const response = await fetch('/analytics/models');
+                const models = await response.json();
+                const select = document.getElementById('modelFilter');
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to load models:', error);
+            }
+        }
+
+        async function refreshData() {
+            try {
+                const filters = getFilters();
+                
+                // Load enhanced stats for summary cards
+                const statsResponse = await fetch('/analytics/stats/enhanced?' + new URLSearchParams(filters));
+                const stats = await statsResponse.json();
+                
+                // Load messages for charts and table
+                const messagesResponse = await fetch('/analytics/messages?' + new URLSearchParams(filters));
+                messages = await messagesResponse.json();
+                filteredMessages = messages;
+                
+                updateSummaryCards(stats);
+                updateCharts();
+                updateMessageTable();
+                
+                document.getElementById('lastUpdate').textContent = 
+                    `Last updated: ${new Date().toLocaleTimeString()}`;
+            } catch (error) {
+                console.error('Failed to refresh data:', error);
+                showNotification('Failed to load data', 'error');
+            }
+        }
+
+        function getFilters() {
+            const filters = {};
+            
+            const search = document.getElementById('searchInput').value;
+            if (search) filters.search = search;
+            
+            const model = document.getElementById('modelFilter').value;
+            if (model) filters.model = model;
+            
+            const timeRange = document.getElementById('timeRangeFilter').value;
+            if (timeRange !== 'custom') {
+                const now = Date.now();
+                const ranges = {
+                    '10m': 10 * 60 * 1000,
+                    '1h': 60 * 60 * 1000,
+                    '24h': 24 * 60 * 60 * 1000,
+                    '7d': 7 * 24 * 60 * 60 * 1000
+                };
+                filters.start_time = Math.floor((now - ranges[timeRange]) / 1000);
+                filters.end_time = Math.floor(now / 1000);
+            }
+            
+            const status = document.getElementById('statusFilter').value;
+            if (status) filters.status = status;
+            
+            // Advanced filters
+            const minInputTokens = document.getElementById('minInputTokens').value;
+            if (minInputTokens) filters.min_input_tokens = minInputTokens;
+            
+            const maxInputTokens = document.getElementById('maxInputTokens').value;
+            if (maxInputTokens) filters.max_input_tokens = maxInputTokens;
+            
+            const minLatency = document.getElementById('minLatency').value;
+            if (minLatency) filters.min_latency = minLatency;
+            
+            const maxLatency = document.getElementById('maxLatency').value;
+            if (maxLatency) filters.max_latency = maxLatency;
+            
+            return filters;
+        }
+
+        function updateSummaryCards(stats) {
+            if (!stats) return;
+            
+            // Update main metrics
+            document.getElementById('totalRequests').textContent = stats.total_requests.toLocaleString();
+            document.getElementById('requestsPerMinute').textContent = stats.requests_per_minute.toFixed(1);
+            document.getElementById('uniqueIPs').textContent = stats.unique_ips.toLocaleString();
+            document.getElementById('tokensPerSecond').textContent = stats.avg_tokens_per_second.toFixed(1);
+            
+            // Update performance metrics
+            document.getElementById('successRate').textContent = stats.success_rate_percent.toFixed(1) + '%';
+            document.getElementById('errorRate').textContent = stats.error_rate_percent.toFixed(1) + '%';
+            document.getElementById('avgResponseTime').textContent = Math.round(stats.avg_response_time_ms) + 'ms';
+            
+            // Update top IPs
+            const topIPsList = document.getElementById('topIPsList');
+            topIPsList.innerHTML = '';
+            if (stats.top_ips && stats.top_ips.length > 0) {
+                stats.top_ips.slice(0, 5).forEach(ip => {
+                    const ipDiv = document.createElement('div');
+                    ipDiv.className = 'flex justify-between items-center text-sm';
+                    ipDiv.innerHTML = `
+                        <span class="text-gray-600">${ip.ip}</span>
+                        <div class="text-right">
+                            <div class="font-medium">${ip.request_count} reqs</div>
+                            <div class="text-xs text-gray-500">${Math.round(ip.avg_latency_ms)}ms avg</div>
+                        </div>
+                    `;
+                    topIPsList.appendChild(ipDiv);
+                });
+            } else {
+                topIPsList.innerHTML = '<div class="text-gray-500 text-sm">No data available</div>';
+            }
+            
+            // Update top models
+            const topModelsList = document.getElementById('topModelsList');
+            topModelsList.innerHTML = '';
+            if (stats.top_models && stats.top_models.length > 0) {
+                stats.top_models.slice(0, 5).forEach(model => {
+                    const modelDiv = document.createElement('div');
+                    modelDiv.className = 'flex justify-between items-center text-sm';
+                    modelDiv.innerHTML = `
+                        <span class="text-gray-600">${model.model}</span>
+                        <div class="text-right">
+                            <div class="font-medium">${model.request_count} reqs</div>
+                            <div class="text-xs text-gray-500">${Math.round(model.avg_latency_ms)}ms avg</div>
+                        </div>
+                    `;
+                    topModelsList.appendChild(modelDiv);
+                });
+            } else {
+                topModelsList.innerHTML = '<div class="text-gray-500 text-sm">No data available</div>';
+            }
+        }
+
+        function initializeCharts() {
+            // Timeline Chart
+            const timelineCtx = document.getElementById('timelineChart').getContext('2d');
+            charts.timeline = new Chart(timelineCtx, {
+                type: 'line',
+                data: { datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                tooltipFormat: 'MMM DD, HH:mm'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true
+                        }
+                    },
+                    onClick: (event, elements) => {
+                        if (elements.length > 0) {
+                            const index = elements[0].index;
+                            const data = charts.timeline.data.datasets[0].data[index];
+                            filterByTimeRange(data.x);
+                        }
+                    }
+                }
+            });
+
+            // Category Chart
+            const categoryCtx = document.getElementById('categoryChart').getContext('2d');
+            charts.category = new Chart(categoryCtx, {
+                type: 'doughnut',
+                data: { datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    onClick: (event, elements) => {
+                        if (elements.length > 0) {
+                            const index = elements[0].index;
+                            const category = charts.category.data.labels[index];
+                            filterByCategory(category);
+                        }
+                    }
+                }
+            });
+
+            // Token Scatter Chart
+            const tokenCtx = document.getElementById('tokenScatterChart').getContext('2d');
+            charts.tokenScatter = new Chart(tokenCtx, {
+                type: 'scatter',
+                data: { datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Input Tokens'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Output Tokens'
+                            }
+                        }
+                    },
+                    onClick: (event, elements) => {
+                        if (elements.length > 0) {
+                            const index = elements[0].index;
+                            const message = filteredMessages[index];
+                            showMessageDetail(message.id);
+                        }
+                    }
+                }
+            });
+
+            // Latency Histogram
+            const latencyCtx = document.getElementById('latencyHistogram').getContext('2d');
+            charts.latency = new Chart(latencyCtx, {
+                type: 'bar',
+                data: { datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Latency (ms)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Count'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateCharts() {
+            // Update timeline
+            const timelineData = aggregateByTime(filteredMessages);
+            charts.timeline.data = {
+                datasets: [{
+                    label: 'Messages',
+                    data: timelineData,
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    tension: 0.4
+                }]
+            };
+            charts.timeline.update();
+
+            // Update category chart
+            const categoryData = aggregateByCategory(filteredMessages);
+            charts.category.data = {
+                labels: Object.keys(categoryData),
+                datasets: [{
+                    data: Object.values(categoryData),
+                    backgroundColor: [
+                        'rgba(59, 130, 246, 0.8)',
+                        'rgba(16, 185, 129, 0.8)',
+                        'rgba(251, 191, 36, 0.8)',
+                        'rgba(239, 68, 68, 0.8)',
+                        'rgba(139, 92, 246, 0.8)'
+                    ]
+                }]
+            };
+            charts.category.update();
+
+            // Update token scatter
+            const scatterData = filteredMessages.map(m => ({
+                x: m.input_tokens || 0,
+                y: m.output_tokens || 0
+            }));
+            charts.tokenScatter.data = {
+                datasets: [{
+                    label: 'Messages',
+                    data: scatterData,
+                    backgroundColor: 'rgba(59, 130, 246, 0.5)'
+                }]
+            };
+            charts.tokenScatter.update();
+
+            // Update latency histogram
+            const latencyData = createLatencyHistogram(filteredMessages);
+            charts.latency.data = {
+                labels: latencyData.labels,
+                datasets: [{
+                    label: 'Response Time',
+                    data: latencyData.data,
+                    backgroundColor: 'rgba(59, 130, 246, 0.8)'
+                }]
+            };
+            charts.latency.update();
+        }
+
+        function updateMessageTable() {
+            const tbody = document.getElementById('messageTableBody');
+            tbody.innerHTML = '';
+            
+            const start = 0;
+            const end = Math.min(pageSize, filteredMessages.length);
+            
+            for (let i = start; i < end; i++) {
+                const message = filteredMessages[i];
+                const row = createMessageRow(message);
+                tbody.appendChild(row);
+            }
+            
+            document.getElementById('showingCount').textContent = end;
+            document.getElementById('totalCount').textContent = filteredMessages.length;
+            
+            currentPage = 1;
+        }
+
+        function createMessageRow(message) {
+            const tr = document.createElement('tr');
+            tr.className = 'message-row cursor-pointer hover:bg-gray-50';
+            tr.onclick = () => showMessageDetail(message.id);
+            
+            const time = new Date(message.timestamp * 1000).toLocaleTimeString();
+            const promptPreview = (message.prompt || '').substring(0, 50) + '...';
+            const tokens = `${message.input_tokens || 0}/${message.output_tokens || 0}`;
+            const latency = message.latency ? `${Math.round(message.latency * 1000)}ms` : 'N/A';
+            
+            tr.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${time}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${message.model || 'Unknown'}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${message.user || 'anonymous'}</td>
+                <td class="px-6 py-4 text-sm text-gray-900 max-w-md truncate">${promptPreview}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${tokens}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${latency}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <i class="fas fa-chevron-right text-gray-400"></i>
+                </td>
+            `;
+            
+            return tr;
+        }
+
+        async function showMessageDetail(messageId) {
+            try {
+                const response = await fetch(`/analytics/messages/${messageId}`);
+                const message = await response.json();
+                
+                const modalContent = document.getElementById('modalContent');
+                modalContent.innerHTML = `
+                    <div class="space-y-6">
+                        <!-- Header Info -->
+                        <div class="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                                <span class="font-medium">Timestamp:</span> 
+                                ${new Date(message.timestamp * 1000).toLocaleString()}
+                            </div>
+                            <div>
+                                <span class="font-medium">Request ID:</span> 
+                                <code class="bg-gray-100 px-1 rounded">${message.id || 'N/A'}</code>
+                            </div>
+                            <div>
+                                <span class="font-medium">Model:</span> ${message.model || 'Unknown'}
+                            </div>
+                            <div>
+                                <span class="font-medium">User:</span> ${message.user || 'anonymous'}
+                            </div>
+                        </div>
+                        
+                        <!-- Prompt Section -->
+                        <div>
+                            <h3 class="font-semibold mb-2">
+                                Prompt 
+                                <span class="text-gray-500 font-normal">(${message.input_tokens || 0} tokens)</span>
+                            </h3>
+                            <div class="bg-gray-50 p-4 rounded-lg overflow-auto max-h-64">
+                                <pre class="whitespace-pre-wrap">${message.prompt || 'No prompt available'}</pre>
+                            </div>
+                        </div>
+                        
+                        <!-- Response Section -->
+                        <div>
+                            <h3 class="font-semibold mb-2">
+                                Response 
+                                <span class="text-gray-500 font-normal">(${message.output_tokens || 0} tokens)</span>
+                            </h3>
+                            <div class="bg-gray-50 p-4 rounded-lg overflow-auto max-h-64">
+                                <pre class="whitespace-pre-wrap">${message.response || 'No response available'}</pre>
+                            </div>
+                        </div>
+                        
+                        <!-- Metrics Section -->
+                        <div>
+                            <h3 class="font-semibold mb-2">Performance Metrics</h3>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                <div>
+                                    <span class="text-gray-600">Total Duration:</span>
+                                    <span class="font-medium">${Math.round((message.latency || 0) * 1000)}ms</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-600">Queue Time:</span>
+                                    <span class="font-medium">${Math.round((message.queue_time || 0) * 1000)}ms</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-600">Time to First Token:</span>
+                                    <span class="font-medium">${Math.round((message.time_to_first_token || 0) * 1000)}ms</span>
+                                </div>
+                                <div>
+                                    <span class="text-gray-600">Tokens/Second:</span>
+                                    <span class="font-medium">${message.tokens_per_second || 'N/A'}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Metadata Section -->
+                        <div>
+                            <h3 class="font-semibold mb-2">Metadata</h3>
+                            <div class="bg-gray-50 p-4 rounded-lg">
+                                <pre class="text-sm">${JSON.stringify(message.metadata || {}, null, 2)}</pre>
+                            </div>
+                        </div>
+                        
+                        <!-- Actions -->
+                        <div class="flex justify-end space-x-4">
+                            <button onclick="copyToClipboard('${message.id}')" 
+                                class="px-4 py-2 text-blue-600 hover:text-blue-800">
+                                <i class="fas fa-copy mr-2"></i>Copy ID
+                            </button>
+                            <button onclick="exportMessage('${message.id}')" 
+                                class="px-4 py-2 text-blue-600 hover:text-blue-800">
+                                <i class="fas fa-download mr-2"></i>Export
+                            </button>
+                        </div>
+                    </div>
+                `;
+                
+                document.getElementById('messageModal').classList.remove('hidden');
+            } catch (error) {
+                console.error('Failed to load message details:', error);
+                showNotification('Failed to load message details', 'error');
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('messageModal').classList.add('hidden');
+        }
+
+        function loadMore() {
+            const tbody = document.getElementById('messageTableBody');
+            const start = currentPage * pageSize;
+            const end = Math.min(start + pageSize, filteredMessages.length);
+            
+            for (let i = start; i < end; i++) {
+                const message = filteredMessages[i];
+                const row = createMessageRow(message);
+                tbody.appendChild(row);
+            }
+            
+            document.getElementById('showingCount').textContent = end;
+            currentPage++;
+        }
+
+        function applyFilters() {
+            refreshData();
+        }
+
+        function toggleAdvancedFilters() {
+            const filters = document.getElementById('advancedFilters');
+            filters.classList.toggle('hidden');
+        }
+
+        function sortTable(column) {
+            // Implement sorting logic
+            filteredMessages.sort((a, b) => {
+                switch(column) {
+                    case 'timestamp':
+                        return b.timestamp - a.timestamp;
+                    case 'tokens':
+                        return (b.input_tokens + b.output_tokens) - (a.input_tokens + a.output_tokens);
+                    case 'latency':
+                        return (b.latency || 0) - (a.latency || 0);
+                }
+            });
+            updateMessageTable();
+        }
+
+        // Helper functions
+        function aggregateByTime(messages) {
+            const buckets = {};
+            messages.forEach(msg => {
+                const hour = new Date(msg.timestamp * 1000);
+                hour.setMinutes(0, 0, 0);
+                const key = hour.getTime();
+                buckets[key] = (buckets[key] || 0) + 1;
+            });
+            
+            return Object.entries(buckets).map(([time, count]) => ({
+                x: parseInt(time),
+                y: count
+            })).sort((a, b) => a.x - b.x);
+        }
+
+        function aggregateByCategory(messages) {
+            const categories = {};
+            messages.forEach(msg => {
+                const category = msg.category || 'other';
+                categories[category] = (categories[category] || 0) + 1;
+            });
+            return categories;
+        }
+
+        function createLatencyHistogram(messages) {
+            const buckets = [0, 100, 250, 500, 1000, 2000, 5000, 10000];
+            const counts = new Array(buckets.length - 1).fill(0);
+            
+            messages.forEach(msg => {
+                const latency = (msg.latency || 0) * 1000; // Convert to ms
+                for (let i = 0; i < buckets.length - 1; i++) {
+                    if (latency >= buckets[i] && latency < buckets[i + 1]) {
+                        counts[i]++;
+                        break;
+                    }
+                }
+            });
+            
+            const labels = buckets.slice(0, -1).map((b, i) => `${b}-${buckets[i + 1]}ms`);
+            return { labels, data: counts };
+        }
+
+        function showNotification(message, type = 'info') {
+            // Implement notification system
+            console.log(`${type}: ${message}`);
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                showNotification('Copied to clipboard', 'success');
+            });
+        }
+
+        async function exportMessage(messageId) {
+            // Implement export functionality
+            window.open(`/analytics/export?message_id=${messageId}&format=json`);
+        }
+
+        async function exportData() {
+            const filters = getFilters();
+            window.open('/analytics/export?' + new URLSearchParams({...filters, format: 'csv'}));
+        }
+
+        function filterByTimeRange(timestamp) {
+            // Implement time range filtering
+            console.log('Filter by time:', timestamp);
+        }
+
+        function filterByCategory(category) {
+            // Implement category filtering
+            console.log('Filter by category:', category);
+        }
+    </script>
+</body>
+</html>
