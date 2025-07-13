@@ -1,0 +1,11 @@
+# Ollama Proxy Configuration
+# If the service can't find Ollama automatically, uncomment and set the path below:
+
+# OLLAMA_PATH=C:\Program Files\Ollama\ollama.exe
+# OLLAMA_PATH=C:\Users\YourUsername\AppData\Local\Programs\Ollama\ollama.exe
+
+# Other configuration options:
+# OLLAMA_HOST=0.0.0.0:11435
+# OLLAMA_KEEP_ALIVE=-1
+# ANALYTICS_BACKEND=sqlite
+# ANALYTICS_DIR=.\ollama_analytics

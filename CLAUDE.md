@@ -6,6 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a transparent metrics proxy for Ollama that adds Prometheus monitoring and analytics collection without requiring changes to existing applications. The proxy intercepts API calls, collects metrics, and forwards requests to Ollama.
 
+## CRITICAL MISTAKES TO AVOID
+
+### GO VERSION - STOP FUCKING UP
+1. **The Go proxy already has NATIVE Windows service support via `golang.org/x/sys/windows/svc`**
+   - DO NOT USE WinSW - it's unnecessary and causes problems
+   - The Go executable runs with `-service` flag for service mode
+   - Just use `sc.exe create` to install the service directly
+   
+2. **STOP CREATING NEW FILES**
+   - Fix existing files, don't create test scripts
+   - Don't create debug scripts
+   - Don't create "helper" scripts
+   - Just fix the fucking problem in the existing files
+
+3. **The current issue**: sc.exe command line quoting
+   - Service won't start because the binPath quoting is wrong
+   - This is NOT a complex architectural issue
+   - It's just getting the sc.exe syntax right
+
 ## Key Commands
 
 ### Installation and Setup
