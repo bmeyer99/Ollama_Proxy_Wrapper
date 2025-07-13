@@ -3,8 +3,8 @@
 .SYNOPSIS
     Uninstalls the Ollama Metrics Proxy Windows Service
 .DESCRIPTION
-    This script removes the Ollama Metrics Proxy service from Windows.
-    The proxy files remain installed for manual use.
+    This script removes the Ollama Metrics Proxy service and cleans up
+    all related files.
 #>
 
 # Script setup
@@ -12,123 +12,100 @@ $ErrorActionPreference = "Stop"
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptPath
 
-# Import utilities
-. "$scriptPath\ServiceUtilities.ps1"
-Import-Module "$scriptPath\OllamaManager.psm1" -Force
+# Logging function
+function Write-Log {
+    param([string]$Message, [string]$Level = "INFO")
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logMessage = "[$timestamp] [$Level] $Message"
+    Write-Host $logMessage
+}
 
-Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host " Uninstalling Ollama Metrics Proxy Service" -ForegroundColor Cyan
-Write-Host "=========================================================" -ForegroundColor Cyan
+Write-Host "`n============================================" -ForegroundColor Cyan
+Write-Host " Ollama Metrics Proxy Service Uninstaller" -ForegroundColor Cyan
+Write-Host "============================================`n" -ForegroundColor Cyan
+
+# Check if running as administrator
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    throw "This script must be run as Administrator"
+}
+
+$serviceName = "OllamaMetricsProxy"
+
+# Check if service exists
+$service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if (-not $service) {
+    Write-Log "Service '$serviceName' is not installed" "WARN"
+    exit 0
+}
+
+# Stop the service if running
+if ($service.Status -eq 'Running') {
+    Write-Log "Stopping service..."
+    Stop-Service -Name $serviceName -Force
+    
+    # Wait for service to stop
+    $timeout = 30
+    $elapsed = 0
+    while ((Get-Service -Name $serviceName).Status -ne 'Stopped' -and $elapsed -lt $timeout) {
+        Start-Sleep -Seconds 1
+        $elapsed++
+    }
+    
+    if ((Get-Service -Name $serviceName).Status -ne 'Stopped') {
+        Write-Log "Warning: Service did not stop gracefully" "WARN"
+    }
+}
+
+# Uninstall using WinSW if available
+$winswExe = Join-Path $scriptPath "OllamaMetricsProxy.exe"
+if (Test-Path $winswExe) {
+    Write-Log "Uninstalling service with WinSW..."
+    & $winswExe uninstall | Out-Null
+    Start-Sleep -Seconds 2
+}
+
+# Use sc.exe as backup
+Write-Log "Removing service registration..."
+& sc.exe delete $serviceName | Out-Null
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Log "Service uninstalled successfully"
+} else {
+    Write-Log "Warning: sc.exe delete returned error code $LASTEXITCODE" "WARN"
+}
+
+# Clean up WinSW files
+$filesToClean = @(
+    "OllamaMetricsProxy.exe",
+    "OllamaMetricsProxy.exe.config",
+    "OllamaMetricsProxy.out.log",
+    "OllamaMetricsProxy.err.log",
+    "OllamaMetricsProxy.wrapper.log",
+    "winsw.exe"
+)
+
+Write-Log "Cleaning up service files..."
+foreach ($file in $filesToClean) {
+    $filePath = Join-Path $scriptPath $file
+    if (Test-Path $filePath) {
+        try {
+            Remove-Item $filePath -Force
+            Write-Log "Removed: $file"
+        } catch {
+            Write-Log "Failed to remove $file : $($_.Exception.Message)" "WARN"
+        }
+    }
+}
+
+Write-Host "`n============================================" -ForegroundColor Green
+Write-Host " Service uninstalled successfully!" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "The Ollama Metrics Proxy service has been removed."
+Write-Host ""
+Write-Host "Note: The proxy executable and analytics data have been preserved."
+Write-Host "      Delete them manually if no longer needed."
 Write-Host ""
 
-# Initialize logging
-$logFile = Initialize-Log -LogPrefix "service_uninstall"
-
-try {
-    # Check prerequisites
-    Test-AdminPrivileges
-    
-    # Check if service exists
-    Write-Log "Checking for service..."
-    $service = Get-Service -Name "OllamaMetricsProxy" -ErrorAction SilentlyContinue
-    
-    if (-not $service) {
-        Write-Log "Service 'OllamaMetricsProxy' not found."
-        Write-Log "Nothing to uninstall."
-        return
-    }
-    
-    # Stop the service
-    Write-Log "Stopping service..."
-    Stop-ServiceSafely -ServiceName "OllamaMetricsProxy"
-    
-    # Use WinSW for removal
-    $winswPath = Join-Path $scriptPath "winsw.exe"
-    $configPath = Join-Path $scriptPath "ollama-service.xml"
-    
-    if ((Test-Path $winswPath) -and (Test-Path $configPath)) {
-        Write-Log "Attempting WinSW service removal..."
-        try {
-            $process = Start-Process -FilePath $winswPath -ArgumentList "uninstall", "`"$configPath`"" -Wait -PassThru -RedirectStandardOutput "$env:TEMP\winsw_uninstall_stdout.txt" -RedirectStandardError "$env:TEMP\winsw_uninstall_stderr.txt" -NoNewWindow
-            
-            $stdout = Get-Content "$env:TEMP\winsw_uninstall_stdout.txt" -ErrorAction SilentlyContinue
-            $stderr = Get-Content "$env:TEMP\winsw_uninstall_stderr.txt" -ErrorAction SilentlyContinue
-            
-            if ($stdout) { 
-                foreach ($line in $stdout) { Write-Log "  $line" }
-            }
-            if ($stderr) { 
-                foreach ($line in $stderr) { Write-Log "  $line" }
-            }
-            
-            if ($process.ExitCode -eq 0) {
-                Write-Log "WinSW service removal completed" -Level Success
-            } else {
-                Write-Log "WinSW service removal failed, using fallback" -Level Warning
-                Remove-ServiceSafely -ServiceName "OllamaMetricsProxy"
-            }
-        } catch {
-            Write-Log "WinSW service removal failed: $($_.Exception.Message)" -Level Warning
-            Remove-ServiceSafely -ServiceName "OllamaMetricsProxy"
-        }
-    } else {
-        Write-Log "WinSW not found, using manual removal"
-        Remove-ServiceSafely -ServiceName "OllamaMetricsProxy"
-    }
-    
-    # Verify removal
-    Start-Sleep -Seconds 2
-    $service = Get-Service -Name "OllamaMetricsProxy" -ErrorAction SilentlyContinue
-    if ($service) {
-        Write-Log ""
-        Write-Log "ERROR: Failed to remove service" -Level Error
-        Write-Log "You may need to restart Windows to complete removal" -Level Error
-        throw "Service removal failed"
-    } else {
-        Write-Log ""
-        Write-Host "=========================================================" -ForegroundColor Green
-        Write-Host " Service Successfully Uninstalled" -ForegroundColor Green
-        Write-Host "=========================================================" -ForegroundColor Green
-        Write-Host ""
-        Write-Host "The Ollama Metrics Proxy service has been removed." -ForegroundColor White
-        
-        # Restore Ollama auto-start configurations
-        Write-Log ""
-        Write-Log "Restoring Ollama auto-start configurations..."
-        if (Restore-OllamaAutoStart) {
-            Write-Log "Ollama will now start normally with Windows" -Level Success
-        } else {
-            Write-Log "Could not restore some auto-start configurations" -Level Warning
-        }
-        
-        Write-Host ""
-        Write-Host "Note: The proxy files are still installed." -ForegroundColor Gray
-        Write-Host "You can still use: ollama_metrics.bat" -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "To reinstall the service later:" -ForegroundColor Gray
-        Write-Host "  Run Install-Service.ps1 as Administrator" -ForegroundColor Gray
-        
-        # Cleanup WinSW files if requested
-        Write-Host ""
-        $cleanupResponse = Read-Host "Remove WinSW files? (Y/N)"
-        if ($cleanupResponse -eq 'Y' -or $cleanupResponse -eq 'y') {
-            $winswPath = Join-Path $scriptPath "winsw.exe"
-            if (Test-Path $winswPath) {
-                Remove-Item $winswPath -Force
-                Write-Log "WinSW executable removed"
-                Write-Host "WinSW files removed." -ForegroundColor Green
-            }
-        }
-    }
-    
-} catch {
-    Write-Log ""
-    Write-Log "ERROR: $($_.Exception.Message)" -Level Error
-    throw
-} finally {
-    Write-Host ""
-    Write-Host "Log saved to: $logFile" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "Press any key to continue..."
-    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
-}
+Write-Host "`nPress any key to exit..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

@@ -3,8 +3,9 @@
 .SYNOPSIS
     Installs the Ollama Metrics Proxy as a Windows Service
 .DESCRIPTION
-    This script installs the Ollama Metrics Proxy service that runs on startup
-    and provides metrics collection for Ollama API calls.
+    This script installs the Ollama Metrics Proxy service using WinSW for reliable
+    service management. The service runs on startup and provides metrics collection
+    for Ollama API calls.
 #>
 
 # Script setup
@@ -12,219 +13,426 @@ $ErrorActionPreference = "Stop"
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptPath
 
-# Import utilities
-. "$scriptPath\ServiceUtilities.ps1"
-Import-Module "$scriptPath\OllamaManager.psm1" -Force
+# Logging function
+function Write-Log {
+    param([string]$Message, [string]$Level = "INFO")
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logMessage = "[$timestamp] [$Level] $Message"
+    Write-Host $logMessage
+}
 
-# Installation functions
-function Install-WinSWService {
-    Write-Log "Installing with WinSW (Windows Service Wrapper)..."
+Write-Host "`n============================================" -ForegroundColor Cyan
+Write-Host " Ollama Metrics Proxy Service Installer" -ForegroundColor Cyan
+Write-Host "============================================`n" -ForegroundColor Cyan
+
+# Check if running as administrator
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    throw "This script must be run as Administrator"
+}
+
+# Check if ollama-proxy.exe exists, build if needed
+$exePath = Join-Path $scriptPath "ollama-proxy.exe"
+if (-not (Test-Path $exePath)) {
+    Write-Log "ollama-proxy.exe not found. Building it now..."
     
-    # Download WinSW if not present
-    $winswPath = Join-Path $scriptPath "winsw.exe"
-    if (-not (Test-Path $winswPath)) {
-        Write-Log "Downloading WinSW..."
-        try {
-            $winswUrl = "https://github.com/winsw/winsw/releases/download/v3.0.0-alpha.11/WinSW-x64.exe"
-            Invoke-WebRequest -Uri $winswUrl -OutFile $winswPath -UseBasicParsing
-            Write-Log "WinSW downloaded successfully"
-        } catch {
-            throw "Failed to download WinSW: $($_.Exception.Message)"
-        }
-    }
-    
-    # Update configuration file with correct Python path
-    $configPath = Join-Path $scriptPath "ollama-service.xml"
-    if (-not (Test-Path $configPath)) {
-        throw "Service configuration file not found: $configPath"
-    }
-    
-    # Get Python executable path
-    $pythonPath = (Get-Command python).Source
-    Write-Log "Using Python path: $pythonPath"
-    
-    # Get Ollama executable path
-    $ollamaPath = $ollamaInfo.Path
-    Write-Log "Using Ollama path: $ollamaPath"
-    
-    # Update XML with correct paths
-    $xmlContent = Get-Content $configPath -Raw
-    $xmlContent = $xmlContent -replace "PYTHON_PATH_PLACEHOLDER", $pythonPath
-    $xmlContent = $xmlContent -replace "OLLAMA_PATH_PLACEHOLDER", $ollamaPath
-    Set-Content $configPath $xmlContent
-    
-    # Install service using WinSW
-    Write-Log "Installing service with WinSW..."
-    Write-Log "Command: $winswPath install $configPath"
-    
+    # Check if Go is installed
     try {
-        $process = Start-Process -FilePath $winswPath -ArgumentList "install", "`"$configPath`"" -Wait -PassThru -RedirectStandardOutput "$env:TEMP\winsw_install_stdout.txt" -RedirectStandardError "$env:TEMP\winsw_install_stderr.txt" -NoNewWindow
-        
-        $stdout = Get-Content "$env:TEMP\winsw_install_stdout.txt" -ErrorAction SilentlyContinue
-        $stderr = Get-Content "$env:TEMP\winsw_install_stderr.txt" -ErrorAction SilentlyContinue
-        
-        Write-Log "WinSW install STDOUT:"
-        if ($stdout) { 
-            foreach ($line in $stdout) { Write-Log "  $line" }
-        } else {
-            Write-Log "  (no stdout output)"
-        }
-        
-        Write-Log "WinSW install STDERR:"
-        if ($stderr) { 
-            foreach ($line in $stderr) { Write-Log "  $line" }
-        } else {
-            Write-Log "  (no stderr output)"
-        }
-        
-        Write-Log "WinSW process exit code: $($process.ExitCode)"
-        
-        if ($process.ExitCode -ne 0) {
-            throw "WinSW service install failed with exit code: $($process.ExitCode)"
-        }
-        
-        Write-Log "Service installed successfully with WinSW" -Level Success
-        
+        $goVersion = & go version 2>$null
+        Write-Log "Found Go: $goVersion"
     } catch {
-        Write-Log "ERROR: Failed to install service with WinSW: $($_.Exception.Message)" -Level Error
-        throw
-    }
-}
-
-
-# Main execution
-Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host " Installing Ollama Metrics Proxy Service" -ForegroundColor Cyan
-Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host ""
-
-# Initialize logging
-$logFile = Initialize-Log -LogPrefix "service_install"
-
-try {
-    # Check prerequisites
-    Test-AdminPrivileges
-    Test-PythonInstallation
-    
-    # Check if Ollama is installed
-    Write-Log "Checking Ollama installation..."
-    $ollamaInfo = Test-OllamaInstallation
-    if (-not $ollamaInfo.Installed) {
-        throw "Ollama is not installed. Please install Ollama first from https://ollama.ai"
-    }
-    Write-Log "Ollama found: $($ollamaInfo.Version)" -Level Success
-    if ($ollamaInfo.NotInPath) {
-        Write-Log "Note: Ollama not in PATH, using: $($ollamaInfo.Path)" -Level Warning
+        Write-Log "ERROR: Go is not installed!" "ERROR"
+        Write-Log "Please install Go from https://go.dev/dl/" "ERROR"
+        exit 1
     }
     
-    # Handle existing Ollama processes
-    $ollamaProcesses = Get-OllamaProcess
-    if ($ollamaProcesses.Count -gt 0) {
-        Write-Log ""
-        Write-Log "Found existing Ollama process(es) using port 11434" -Level Warning
-        Write-Log "The metrics proxy needs to control this port."
-        Write-Log ""
-        
-        $response = Read-Host "Stop existing Ollama processes? (Y/N)"
-        if ($response -eq 'Y' -or $response -eq 'y') {
-            if (-not (Stop-OllamaGracefully -Force)) {
-                throw "Failed to stop existing Ollama processes"
-            }
-        } else {
-            throw "Cannot proceed with existing Ollama processes running"
-        }
+    # Build the executable
+    Write-Log "Downloading dependencies..."
+    & go mod download
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "ERROR: Failed to download Go dependencies!" "ERROR"
+        exit 1
     }
     
-    # Now check port availability
-    Test-PortAvailability -Port 11434 -PortName "proxy"
-    
-    # Handle auto-start configurations
-    Write-Log ""
-    $autoStartConfigs = Get-OllamaAutoStart
-    if ($autoStartConfigs.Count -gt 0) {
-        Write-Log "Found Ollama auto-start configuration(s):" -Level Warning
-        foreach ($config in $autoStartConfigs) {
-            Write-Log "  - $($config.Type): $($config.Name)"
-        }
-        Write-Log ""
-        Write-Log "These need to be disabled so the metrics proxy can manage Ollama."
-        Write-Log "They will be restored when you uninstall the metrics proxy."
-        Write-Log ""
-        
-        $response = Read-Host "Disable Ollama auto-start? (Y/N)"
-        if ($response -eq 'Y' -or $response -eq 'y') {
-            if (-not (Disable-OllamaAutoStart)) {
-                Write-Log "Warning: Some auto-start configs could not be disabled" -Level Warning
-                Write-Log "You may need to disable them manually" -Level Warning
-            }
-        } else {
-            Write-Log "Warning: Ollama auto-start may conflict with the metrics proxy" -Level Warning
-        }
+    Write-Log "Building ollama-proxy.exe..."
+    & go build -ldflags="-w -s" -o ollama-proxy.exe .
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "ERROR: Failed to build ollama-proxy.exe!" "ERROR"
+        exit 1
     }
     
-    # Check required files
-    $requiredFiles = @("ollama_wrapper.py", "ollama_fastapi_proxy.py", "ollama_runner.py", "ollama-service.xml")
-    Test-RequiredFiles -Files $requiredFiles
-    
-    # Stop and remove existing service if present
-    Write-Log "Checking for existing service..."
-    $existingService = Get-Service -Name "OllamaMetricsProxy" -ErrorAction SilentlyContinue
-    if ($existingService) {
-        Write-Log "Found existing service, removing..."
-        Stop-ServiceSafely -ServiceName "OllamaMetricsProxy"
-        Remove-ServiceSafely -ServiceName "OllamaMetricsProxy"
-    }
-    
-    # Install required Python packages (latest versions for Python 3.13 compatibility)
-    Install-PythonPackages -Packages @("fastapi", "uvicorn", "httpx", "prometheus-client", "requests")
-    
-    # Install service using WinSW
-    Install-WinSWService
-    
-    # Configure service
-    Write-Log ""
-    Write-Log "Configuring service..."
-    Set-Service -Name "OllamaMetricsProxy" -StartupType Automatic
-    
-    # Set failure actions
-    & sc.exe failure OllamaMetricsProxy reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
-    
-    # Start service
-    Write-Log "Starting service..."
-    Start-Service -Name "OllamaMetricsProxy"
-    Start-Sleep -Seconds 3
-    
-    # Verify service is running
-    $service = Get-Service -Name "OllamaMetricsProxy"
-    if ($service.Status -ne "Running") {
-        Write-Log ""
-        Write-Log "WARNING: Service installed but not running" -Level Warning
-        Write-Log "Service status: $($service.Status)"
+    if (Test-Path $exePath) {
+        Write-Log "Successfully built ollama-proxy.exe" "SUCCESS"
     } else {
-        Write-Log ""
-        Write-Host "=========================================================" -ForegroundColor Green
-        Write-Host " SUCCESS: Ollama Metrics Proxy Service Installed!" -ForegroundColor Green
-        Write-Host "=========================================================" -ForegroundColor Green
-        Write-Host ""
-        Write-Host "Service Name: OllamaMetricsProxy" -ForegroundColor White
-        Write-Host "Proxy URL: http://localhost:11434" -ForegroundColor White
-        Write-Host "Metrics URL: http://localhost:11434/metrics" -ForegroundColor White
-        Write-Host "Analytics URL: http://localhost:11434/analytics/stats" -ForegroundColor White
-        Write-Host ""
-        Write-Host "The service will start automatically on boot." -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "To uninstall: run Uninstall-Service.ps1 as Administrator" -ForegroundColor Gray
+        Write-Log "ERROR: Build completed but ollama-proxy.exe not found!" "ERROR"
+        exit 1
+    }
+}
+
+# Find Ollama executable BEFORE installing service
+Write-Log "Locating Ollama executable..."
+$ollamaPath = $null
+
+# Check PATH first
+try {
+    $ollamaPath = (Get-Command ollama -ErrorAction Stop).Source
+    Write-Log "Found Ollama in PATH: $ollamaPath"
+} catch {
+    # Check common locations
+    $commonPaths = @(
+        "C:\Program Files\Ollama\ollama.exe",
+        "C:\Program Files (x86)\Ollama\ollama.exe",
+        "$env:USERPROFILE\AppData\Local\Programs\Ollama\ollama.exe"
+    )
+    
+    foreach ($path in $commonPaths) {
+        if (Test-Path $path) {
+            $ollamaPath = $path
+            Write-Log "Found Ollama at: $ollamaPath"
+            break
+        }
+    }
+}
+
+if (-not $ollamaPath) {
+    Write-Log "ERROR: Ollama executable not found!" "ERROR"
+    Write-Log "Please install Ollama first or ensure it's in PATH" "ERROR"
+    exit 1
+}
+
+# Stop and remove existing service if present
+$serviceName = "OllamaMetricsProxy"
+$existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($existingService) {
+    Write-Log "Found existing service, removing..."
+    
+    if ($existingService.Status -eq 'Running') {
+        Stop-Service -Name $serviceName -Force
+        Start-Sleep -Seconds 2
     }
     
-} catch {
-    Write-Log ""
-    Write-Log "ERROR: $($_.Exception.Message)" -Level Error
-    Write-Log "Installation failed. Check the log: $logFile" -Level Error
-    throw
-} finally {
-    Write-Host ""
-    Write-Host "Log saved to: $logFile" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "Press any key to continue..."
-    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    # Try WinSW uninstall first
+    $winswPath = Join-Path $scriptPath "winsw.exe"
+    if (Test-Path $winswPath) {
+        & $winswPath uninstall | Out-Null
+        Start-Sleep -Seconds 2
+    }
+    
+    # Then use sc delete as backup
+    & sc.exe delete $serviceName | Out-Null
+    Start-Sleep -Seconds 2
 }
+
+# Kill any existing Ollama processes
+Write-Log "Checking for existing Ollama processes..."
+$ollamaProcesses = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
+if ($ollamaProcesses) {
+    Write-Log "Stopping existing Ollama processes..."
+    $ollamaProcesses | Stop-Process -Force
+    Start-Sleep -Seconds 2
+}
+
+# We don't need WinSW - the Go executable has native Windows service support
+# Skip WinSW download and use native service installation
+if ($false) { # Disabled WinSW path
+    Write-Log "Downloading WinSW (Windows Service Wrapper)..."
+    try {
+        $winswUrl = "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW.NET4.exe"
+        Invoke-WebRequest -Uri $winswUrl -OutFile $winswPath -UseBasicParsing
+        Write-Log "WinSW downloaded successfully"
+    } catch {
+        Write-Log "Failed to download WinSW: $($_.Exception.Message)" "ERROR"
+        Write-Log "Falling back to sc.exe installation..." "WARN"
+        
+        # Fallback to sc.exe
+        $installCmd = "sc.exe create $serviceName binPath= `"$exePath -service`" start= delayed-auto DisplayName= `"Ollama Metrics Proxy`""
+        Invoke-Expression $installCmd
+        
+        if ($LASTEXITCODE -eq 0) {
+            sc.exe description $serviceName "Transparent metrics proxy for Ollama with Prometheus monitoring and analytics"
+            sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/10000/restart/30000
+            
+            # Set Ollama path in service environment
+            Write-Log "Setting service environment variables..."
+            $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName"
+            New-ItemProperty -Path $regPath -Name "Environment" -Value @("OLLAMA_EXECUTABLE_PATH=$ollamaPath") -PropertyType MultiString -Force | Out-Null
+            
+            Write-Log "Service installed with sc.exe"
+            Start-Service -Name $serviceName
+            
+            Write-Host "`n============================================" -ForegroundColor Green
+            Write-Host " Service installed successfully!" -ForegroundColor Green
+            Write-Host "============================================" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "Service Name: $serviceName"
+            Write-Host "Status: Running"
+            Write-Host ""
+            Write-Host "The proxy is now running on:"
+            Write-Host "  http://localhost:11434" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "View metrics at:"
+            Write-Host "  http://localhost:11434/metrics" -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "View analytics at:"
+            Write-Host "  http://localhost:11434/analytics" -ForegroundColor Yellow
+            Write-Host ""
+        } else {
+            throw "Failed to create service"
+        }
+        exit 0
+    }
+}
+
+# Prepare installation environment
+$prepareScript = Join-Path $scriptPath "prepare-installation.bat"
+if (Test-Path $prepareScript) {
+    Write-Log "Preparing installation environment..."
+    & $prepareScript | Out-Null
+}
+
+# Create logs directory if it doesn't exist
+$logsDir = Join-Path $scriptPath "logs"
+if (-not (Test-Path $logsDir)) {
+    New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
+    Write-Log "Created logs directory"
+}
+
+# Install using WinSW
+Write-Log "Installing service with WinSW..."
+
+# Update XML config with Ollama path
+$xmlConfig = Join-Path $scriptPath "ollama-service.xml"
+if (Test-Path $xmlConfig) {
+    $xml = [xml](Get-Content $xmlConfig)
+    
+    # Add or update Ollama path environment variable
+    $ollamaEnvVar = $xml.service.env | Where-Object { $_.name -eq "OLLAMA_EXECUTABLE_PATH" }
+    if ($ollamaEnvVar) {
+        $ollamaEnvVar.value = $ollamaPath
+    } else {
+        $newEnv = $xml.CreateElement("env")
+        $newEnv.SetAttribute("name", "OLLAMA_EXECUTABLE_PATH")
+        $newEnv.SetAttribute("value", $ollamaPath)
+        $xml.service.AppendChild($newEnv) | Out-Null
+    }
+    
+    $xml.Save($xmlConfig)
+    Write-Log "Updated XML config with Ollama path: $ollamaPath"
+}
+
+# Use native Windows service installation
+Write-Log "Installing service using native Windows service support..."
+
+# Create service using sc.exe with the actual Go executable
+# CRITICAL: sc.exe needs escaped quotes in the binPath
+$serviceBinary = "`"$exePath`" -service"
+Write-Log "Creating service with binary path: $serviceBinary"
+
+# Delete existing service first to ensure clean state
+& sc.exe delete $serviceName 2>$null | Out-Null
+
+# Create the service with properly escaped quotes
+# Run as LocalSystem for full permissions
+$result = & sc.exe create $serviceName binPath= $serviceBinary start= delayed-auto DisplayName= "Ollama Metrics Proxy" obj= LocalSystem 2>&1
+Write-Log "SC Create Result: $result"
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Log "Service created successfully"
+    
+    # Set service description
+    & sc.exe description $serviceName "Transparent metrics proxy for Ollama with Prometheus monitoring and analytics" | Out-Null
+    
+    # Configure service recovery
+    & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+    
+    # Set Ollama path in registry for the service
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName"
+    New-ItemProperty -Path $regPath -Name "Environment" -Value @(
+        "OLLAMA_EXECUTABLE_PATH=$ollamaPath",
+        "OLLAMA_HOST=0.0.0.0:11435",
+        "ANALYTICS_BACKEND=sqlite",
+        "ANALYTICS_DIR=$scriptPath\ollama_analytics"
+    ) -PropertyType MultiString -Force | Out-Null
+    
+    Write-Log "Service configuration completed"
+    
+    # Create event log source for the service
+    Write-Log "Creating event log source..."
+    try {
+        New-EventLog -LogName Application -Source $serviceName -ErrorAction SilentlyContinue
+        Write-Log "Event log source created"
+    } catch {
+        Write-Log "Event log source may already exist: $_" "WARN"
+    }
+    
+    # Verify service configuration
+    Write-Log "Verifying service configuration..."
+    $serviceConfig = & sc.exe qc $serviceName 2>&1 | Out-String
+    Write-Log "Service configuration:
+$serviceConfig"
+} else {
+    Write-Log "Failed to create service: $result" "ERROR"
+    throw "Service creation failed"
+}
+
+# Create empty log files to prevent WinSW rotation errors
+$logFiles = @(
+    "OllamaMetricsProxy.out.log",
+    "OllamaMetricsProxy.err.log",
+    "OllamaMetricsProxy.wrapper.log",
+    "logs\OllamaMetricsProxy.log"
+)
+
+foreach ($logFile in $logFiles) {
+    $logPath = Join-Path $scriptPath $logFile
+    $logDir = Split-Path -Parent $logPath
+    
+    # Create directory if needed
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    }
+    
+    # Create empty file if it doesn't exist
+    if (-not (Test-Path $logPath)) {
+        New-Item -ItemType File -Path $logPath -Force | Out-Null
+        Write-Log "Created log file: $logFile"
+    }
+}
+
+# Service is now installed
+if ($true) {
+    Write-Log "Service installed successfully"
+    
+    # Start the service
+    Write-Log "Starting service..."
+    try {
+        Start-Service -Name $serviceName
+    } catch {
+        Write-Log "Service start failed: $($_.Exception.Message)" "ERROR"
+        
+        # Get detailed service status
+        Write-Log "Getting detailed service status..." "INFO"
+        $serviceStatus = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($serviceStatus) {
+            Write-Log "Service Status: $($serviceStatus.Status)" "INFO"
+            Write-Log "Service StartType: $($serviceStatus.StartType)" "INFO"
+        }
+        
+        # Try to manually run the executable to see what happens
+        Write-Log "Testing executable manually..." "INFO"
+        try {
+            $testOutput = & $exePath -service 2>&1
+            Write-Log "Manual test output: $testOutput" "INFO"
+        } catch {
+            Write-Log "Manual test failed: $($_.Exception.Message)" "ERROR"
+        }
+        
+        # Check if executable exists and is valid
+        if (Test-Path $exePath) {
+            $fileInfo = Get-Item $exePath
+            Write-Log "Executable size: $($fileInfo.Length) bytes" "INFO"
+            Write-Log "Executable path: $exePath" "INFO"
+        } else {
+            Write-Log "ERROR: Executable not found at $exePath" "ERROR"
+        }
+        
+        # Check WinSW logs - try multiple possible log file names
+        Write-Log "Looking for log files in: $scriptPath" "INFO"
+        
+        # List ALL files in directory to see what's actually there
+        Write-Log "Files in directory:" "INFO"
+        Get-ChildItem $scriptPath -Filter "*.log" | ForEach-Object {
+            Write-Log "  Found: $($_.Name) (Size: $($_.Length) bytes)" "INFO"
+        }
+        
+        $possibleLogs = @(
+            "OllamaMetricsProxy.err.log",
+            "OllamaMetricsProxy.out.log", 
+            "OllamaMetricsProxy.wrapper.log",
+            "winsw.err.log",
+            "winsw.out.log",
+            "*.log"  # Check ANY log file
+        )
+        
+        foreach ($logFile in $possibleLogs) {
+            $logPath = Join-Path $scriptPath $logFile
+            if (Test-Path $logPath) {
+                Write-Log "Found log file: $logFile" "INFO"
+                $logContent = Get-Content $logPath -ErrorAction SilentlyContinue
+                if ($logContent) {
+                    Write-Log "Content of $logFile (last 20 lines):" "INFO"
+                    $logContent | Select-Object -Last 20 | ForEach-Object {
+                        Write-Log "  $_" "INFO"
+                    }
+                } else {
+                    Write-Log "Log file $logFile is empty" "INFO"
+                }
+            }
+        }
+        
+        # Try to get more service details
+        Write-Log "Running sc query for detailed service info..." "INFO"
+        $scOutput = & sc.exe query $serviceName 2>&1
+        Write-Log "SC Query Output: $scOutput" "INFO"
+        
+        # Check if Ollama is available
+        Write-Log "Checking Ollama availability..." "INFO"
+        if (Test-Path $ollamaPath) {
+            Write-Log "Ollama found at: $ollamaPath" "INFO"
+            try {
+                $ollamaVersion = & $ollamaPath --version 2>&1
+                Write-Log "Ollama version: $ollamaVersion" "INFO"
+            } catch {
+                Write-Log "Failed to get Ollama version: $($_.Exception.Message)" "ERROR"
+            }
+        } else {
+            Write-Log "ERROR: Ollama not found at: $ollamaPath" "ERROR"
+        }
+        
+        throw "Service failed to start"
+    }
+    
+    # Wait for service to start
+    $timeout = 30
+    $elapsed = 0
+    while ((Get-Service -Name $serviceName).Status -ne 'Running' -and $elapsed -lt $timeout) {
+        Start-Sleep -Seconds 1
+        $elapsed++
+    }
+    
+    if ((Get-Service -Name $serviceName).Status -eq 'Running') {
+        Write-Host "`n============================================" -ForegroundColor Green
+        Write-Host " Service installed successfully!" -ForegroundColor Green
+        Write-Host "============================================" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Service Name: $serviceName"
+        Write-Host "Status: Running"
+        Write-Host ""
+        Write-Host "The proxy is now running on:"
+        Write-Host "  http://localhost:11434" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "View metrics at:"
+        Write-Host "  http://localhost:11434/metrics" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "View analytics at:"
+        Write-Host "  http://localhost:11434/analytics" -ForegroundColor Yellow
+        Write-Host ""
+        
+        # Test the proxy
+        Write-Log "Testing proxy connectivity..."
+        try {
+            $response = Invoke-WebRequest -Uri "http://localhost:11434/test" -UseBasicParsing -TimeoutSec 5
+            if ($response.StatusCode -eq 200) {
+                Write-Log "Proxy is responding correctly" "SUCCESS"
+            }
+        } catch {
+            Write-Log "Warning: Proxy test failed, but service is running" "WARN"
+        }
+    } else {
+        throw "Service failed to start within $timeout seconds"
+    }
+} else {
+    throw "Failed to install service"
+}
+
+Write-Host "`nPress any key to exit..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

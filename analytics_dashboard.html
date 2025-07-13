@@ -115,8 +115,8 @@
                 <div class="bg-white rounded-lg shadow p-6">
                     <div class="flex items-center justify-between">
                         <div>
-                            <p class="text-sm font-medium text-gray-600">Total Messages</p>
-                            <p class="text-2xl font-bold text-gray-900" id="totalMessages">0</p>
+                            <p class="text-sm font-medium text-gray-600">Total Requests</p>
+                            <p class="text-2xl font-bold text-gray-900" id="totalRequests">0</p>
                         </div>
                         <div class="text-blue-600">
                             <i class="fas fa-comments text-3xl"></i>
@@ -127,28 +127,11 @@
                 <div class="bg-white rounded-lg shadow p-6">
                     <div class="flex items-center justify-between">
                         <div>
-                            <p class="text-sm font-medium text-gray-600">Unique Users</p>
-                            <p class="text-2xl font-bold text-gray-900" id="uniqueUsers">0</p>
+                            <p class="text-sm font-medium text-gray-600">Requests per Minute</p>
+                            <p class="text-2xl font-bold text-gray-900" id="requestsPerMinute">0</p>
                         </div>
                         <div class="text-green-600">
-                            <i class="fas fa-users text-3xl"></i>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="bg-white rounded-lg shadow p-6">
-                    <div>
-                        <p class="text-sm font-medium text-gray-600">Average Tokens</p>
-                        <div class="flex items-baseline space-x-2">
-                            <p class="text-lg font-bold text-gray-900">
-                                <span id="avgInputTokens">0</span>
-                                <span class="text-gray-500 text-sm">in</span>
-                            </p>
-                            <span class="text-gray-400">/</span>
-                            <p class="text-lg font-bold text-gray-900">
-                                <span id="avgOutputTokens">0</span>
-                                <span class="text-gray-500 text-sm">out</span>
-                            </p>
+                            <i class="fas fa-tachometer-alt text-3xl"></i>
                         </div>
                     </div>
                 </div>
@@ -156,11 +139,63 @@
                 <div class="bg-white rounded-lg shadow p-6">
                     <div class="flex items-center justify-between">
                         <div>
-                            <p class="text-sm font-medium text-gray-600">Total Cost</p>
-                            <p class="text-2xl font-bold text-gray-900">$<span id="totalCost">0.00</span></p>
+                            <p class="text-sm font-medium text-gray-600">Unique IPs</p>
+                            <p class="text-2xl font-bold text-gray-900" id="uniqueIPs">0</p>
+                        </div>
+                        <div class="text-purple-600">
+                            <i class="fas fa-users text-3xl"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium text-gray-600">Tokens per Second</p>
+                            <p class="text-2xl font-bold text-gray-900" id="tokensPerSecond">0</p>
                         </div>
                         <div class="text-yellow-600">
-                            <i class="fas fa-dollar-sign text-3xl"></i>
+                            <i class="fas fa-bolt text-3xl"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Performance Insights -->
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Top IPs -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Top IPs by Requests</h3>
+                    <div id="topIPsList" class="space-y-2">
+                        <!-- Dynamic content -->
+                    </div>
+                </div>
+                
+                <!-- Top Models -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Top Models</h3>
+                    <div id="topModelsList" class="space-y-2">
+                        <!-- Dynamic content -->
+                    </div>
+                </div>
+                
+                <!-- Success Rate -->
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">Performance Metrics</h3>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Success Rate</span>
+                            <span class="font-medium" id="successRate">0%</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Error Rate</span>
+                            <span class="font-medium text-red-600" id="errorRate">0%</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-600">Avg Response Time</span>
+                            <span class="font-medium" id="avgResponseTime">0ms</span>
                         </div>
                     </div>
                 </div>
@@ -322,11 +357,17 @@
         async function refreshData() {
             try {
                 const filters = getFilters();
-                const response = await fetch('/analytics/messages?' + new URLSearchParams(filters));
-                messages = await response.json();
+                
+                // Load enhanced stats for summary cards
+                const statsResponse = await fetch('/analytics/stats/enhanced?' + new URLSearchParams(filters));
+                const stats = await statsResponse.json();
+                
+                // Load messages for charts and table
+                const messagesResponse = await fetch('/analytics/messages?' + new URLSearchParams(filters));
+                messages = await messagesResponse.json();
                 filteredMessages = messages;
                 
-                updateSummaryCards();
+                updateSummaryCards(stats);
                 updateCharts();
                 updateMessageTable();
                 
@@ -379,19 +420,59 @@
             return filters;
         }
 
-        function updateSummaryCards() {
-            document.getElementById('totalMessages').textContent = filteredMessages.length.toLocaleString();
+        function updateSummaryCards(stats) {
+            if (!stats) return;
             
-            const uniqueUsers = new Set(filteredMessages.map(m => m.user || 'anonymous')).size;
-            document.getElementById('uniqueUsers').textContent = uniqueUsers.toLocaleString();
+            // Update main metrics
+            document.getElementById('totalRequests').textContent = stats.total_requests.toLocaleString();
+            document.getElementById('requestsPerMinute').textContent = stats.requests_per_minute.toFixed(1);
+            document.getElementById('uniqueIPs').textContent = stats.unique_ips.toLocaleString();
+            document.getElementById('tokensPerSecond').textContent = stats.avg_tokens_per_second.toFixed(1);
             
-            const avgInputTokens = filteredMessages.reduce((sum, m) => sum + (m.input_tokens || 0), 0) / filteredMessages.length || 0;
-            const avgOutputTokens = filteredMessages.reduce((sum, m) => sum + (m.output_tokens || 0), 0) / filteredMessages.length || 0;
-            document.getElementById('avgInputTokens').textContent = Math.round(avgInputTokens).toLocaleString();
-            document.getElementById('avgOutputTokens').textContent = Math.round(avgOutputTokens).toLocaleString();
+            // Update performance metrics
+            document.getElementById('successRate').textContent = stats.success_rate_percent.toFixed(1) + '%';
+            document.getElementById('errorRate').textContent = stats.error_rate_percent.toFixed(1) + '%';
+            document.getElementById('avgResponseTime').textContent = Math.round(stats.avg_response_time_ms) + 'ms';
             
-            const totalCost = filteredMessages.reduce((sum, m) => sum + (m.cost || 0), 0);
-            document.getElementById('totalCost').textContent = totalCost.toFixed(2);
+            // Update top IPs
+            const topIPsList = document.getElementById('topIPsList');
+            topIPsList.innerHTML = '';
+            if (stats.top_ips && stats.top_ips.length > 0) {
+                stats.top_ips.slice(0, 5).forEach(ip => {
+                    const ipDiv = document.createElement('div');
+                    ipDiv.className = 'flex justify-between items-center text-sm';
+                    ipDiv.innerHTML = `
+                        <span class="text-gray-600">${ip.ip}</span>
+                        <div class="text-right">
+                            <div class="font-medium">${ip.request_count} reqs</div>
+                            <div class="text-xs text-gray-500">${Math.round(ip.avg_latency_ms)}ms avg</div>
+                        </div>
+                    `;
+                    topIPsList.appendChild(ipDiv);
+                });
+            } else {
+                topIPsList.innerHTML = '<div class="text-gray-500 text-sm">No data available</div>';
+            }
+            
+            // Update top models
+            const topModelsList = document.getElementById('topModelsList');
+            topModelsList.innerHTML = '';
+            if (stats.top_models && stats.top_models.length > 0) {
+                stats.top_models.slice(0, 5).forEach(model => {
+                    const modelDiv = document.createElement('div');
+                    modelDiv.className = 'flex justify-between items-center text-sm';
+                    modelDiv.innerHTML = `
+                        <span class="text-gray-600">${model.model}</span>
+                        <div class="text-right">
+                            <div class="font-medium">${model.request_count} reqs</div>
+                            <div class="text-xs text-gray-500">${Math.round(model.avg_latency_ms)}ms avg</div>
+                        </div>
+                    `;
+                    topModelsList.appendChild(modelDiv);
+                });
+            } else {
+                topModelsList.innerHTML = '<div class="text-gray-500 text-sm">No data available</div>';
+            }
         }
 
         function initializeCharts() {

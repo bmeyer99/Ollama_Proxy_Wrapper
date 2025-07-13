@@ -1,44 +1,62 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
+# Binaries
+ollama-proxy.exe
+ollama-proxy
+*.exe
+*.dll
 *.so
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
+*.dylib
 
-# Analytics data
-ollama_analytics/
-*.jsonl
-*.jsonl.gz
-*.db
-*.sqlite
+# Go build outputs
+*.test
+*.prof
 
-# Logs
-*.log
-logs/
+# Go modules cache
+go.sum
 
-# Windows service logs
-ollama_service/
-
-# Generated files
-ollama_metrics.bat
-
-# IDE
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
-.DS_Store
+*~
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-*.coverage
-.tox/
-.nox/
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows service files (generated at runtime)
+winsw.exe
+OllamaMetricsProxy.exe
+OllamaMetricsProxy.xml
+
+# Analytics and log directories
+ollama_analytics/
+logs/
+*.log
+*.db
+*.sqlite
+
+# Windows service logs
+OllamaMetricsProxy.out.log
+OllamaMetricsProxy.err.log
+OllamaMetricsProxy.wrapper.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Environment files
+.env
+.env.local
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Crash logs
+crash.log
