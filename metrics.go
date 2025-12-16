@@ -36,7 +36,7 @@ func NewMetricsCollector() *MetricsCollector {
 				Help:    "Request duration distribution",
 				Buckets: []float64{0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0},
 			},
-			[]string{"model", "endpoint", "prompt_category", "client_ip"},
+			[]string{"model", "endpoint", "prompt_category"},  // Removed client_ip for cardinality control
 		),
 		tokensGenerated: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -44,7 +44,7 @@ func NewMetricsCollector() *MetricsCollector {
 				Help:    "Distribution of tokens generated",
 				Buckets: []float64{10, 50, 100, 250, 500, 1000, 2000, 5000},
 			},
-			[]string{"model", "prompt_category", "client_ip"},
+			[]string{"model", "prompt_category"},  // Removed client_ip for cardinality control
 		),
 		tokensPerSecond: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
@@ -52,14 +52,14 @@ func NewMetricsCollector() *MetricsCollector {
 				Help:    "Distribution of token generation speed",
 				Buckets: []float64{1, 5, 10, 20, 30, 50, 75, 100, 150, 200},
 			},
-			[]string{"model", "prompt_category", "client_ip"},
+			[]string{"model", "prompt_category"},  // Removed client_ip for cardinality control
 		),
 		requestsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "ollama_requests_total",
 				Help: "Total number of requests",
 			},
-			[]string{"model", "endpoint", "prompt_category", "status", "client_ip"},
+			[]string{"model", "endpoint", "prompt_category", "status"},  // Removed client_ip for cardinality control
 		),
 		activeRequests: prometheus.NewGauge(
 			prometheus.GaugeOpts{

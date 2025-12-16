@@ -103,11 +103,19 @@ func NewAnalyticsWriter(backend, dataDir string) *AnalyticsWriter {
 // initSQLite initializes the SQLite database
 func (aw *AnalyticsWriter) initSQLite() error {
 	dbPath := filepath.Join(aw.dataDir, "ollama_analytics.db")
-	
-	db, err := sql.Open("sqlite", dbPath)
+
+	// Add WAL mode and timeout to connection string for better concurrency
+	connStr := dbPath + "?_journal=WAL&_timeout=5000&_busy_timeout=5000"
+	db, err := sql.Open("sqlite", connStr)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// CRITICAL: SQLite is single-writer, configure connection pool accordingly
+	// This prevents SQLITE_BUSY errors and improves reliability
+	db.SetMaxOpenConns(1)     // Single writer for SQLite
+	db.SetMaxIdleConns(1)     // Keep connection alive
+	db.SetConnMaxLifetime(0)  // Reuse connections indefinitely
 
 	// Create table
 	createTableSQL := `

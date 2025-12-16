@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -19,11 +21,13 @@ import (
 
 // Proxy handles HTTP reverse proxy with metrics collection
 type Proxy struct {
-	target       *url.URL
-	reverseProxy *httputil.ReverseProxy
-	port         int
-	metrics      *MetricsCollector
-	analytics    *AnalyticsWriter
+	target        *url.URL
+	reverseProxy  *httputil.ReverseProxy
+	port          int
+	metrics       *MetricsCollector
+	analytics     *AnalyticsWriter
+	server        *http.Server
+	maxConcurrent chan struct{} // Semaphore for rate limiting
 }
 
 // NewProxy creates a new proxy instance
@@ -59,10 +63,11 @@ func NewProxy(targetURL string, port int) *Proxy {
 	}
 	
 	p := &Proxy{
-		target:    target,
-		port:      port,
-		metrics:   NewMetricsCollector(),
-		analytics: NewAnalyticsWriter("sqlite", analyticsDir),
+		target:        target,
+		port:          port,
+		metrics:       NewMetricsCollector(),
+		analytics:     NewAnalyticsWriter("sqlite", analyticsDir),
+		maxConcurrent: make(chan struct{}, 50), // Limit to 50 concurrent requests
 	}
 
 	// Create custom transport with proper timeouts for Ollama
@@ -141,25 +146,81 @@ func (p *Proxy) Start() error {
 	// Proxy all other requests
 	mux.HandleFunc("/", p.handleProxy)
 
+	// Create HTTP server with proper timeouts for graceful shutdown
+	p.server = &http.Server{
+		Addr:         fmt.Sprintf(":%d", p.port),
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 90 * time.Second,  // Long timeout for streaming responses
+		IdleTimeout:  120 * time.Second,
+	}
+
 	log.Printf("Starting Ollama Proxy on port %d", p.port)
 	log.Printf("Proxying to Ollama at %s", p.target)
 	log.Printf("Metrics: http://localhost:%d/metrics", p.port)
 	log.Printf("Analytics Dashboard: http://localhost:%d/analytics", p.port)
 
-	return http.ListenAndServe(fmt.Sprintf(":%d", p.port), mux)
+	// Structured logging for startup
+	slog.Info("Proxy starting",
+		"port", p.port,
+		"target", p.target.String(),
+		"metrics_endpoint", fmt.Sprintf("http://localhost:%d/metrics", p.port),
+		"analytics_endpoint", fmt.Sprintf("http://localhost:%d/analytics", p.port),
+	)
+
+	return p.server.ListenAndServe()
 }
 
 // Shutdown gracefully shuts down the proxy
 func (p *Proxy) Shutdown() {
 	log.Printf("Shutting down proxy...")
+	slog.Info("Initiating proxy shutdown")
+
+	// Gracefully shutdown HTTP server with timeout
+	if p.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := p.server.Shutdown(ctx); err != nil {
+			log.Printf("Proxy shutdown error: %v", err)
+			slog.Error("HTTP server shutdown failed", "error", err)
+		} else {
+			log.Printf("HTTP server shutdown complete")
+			slog.Info("HTTP server shutdown complete")
+		}
+	}
+
+	// Close analytics (flushes write queue and closes database)
 	if p.analytics != nil {
 		p.analytics.Close()
+		slog.Info("Analytics writer closed")
 	}
+
 	log.Printf("Proxy shutdown complete")
+	slog.Info("Proxy shutdown complete")
 }
 
 // handleProxy processes and forwards requests
 func (p *Proxy) handleProxy(w http.ResponseWriter, r *http.Request) {
+	// Check if client already disconnected before processing
+	select {
+	case <-r.Context().Done():
+		log.Printf("Client disconnected before proxy processing: %s", r.RemoteAddr)
+		return
+	default:
+	}
+
+	// Acquire semaphore slot for rate limiting
+	select {
+	case p.maxConcurrent <- struct{}{}:
+		// Got a slot, continue processing
+		defer func() { <-p.maxConcurrent }() // Release slot when done
+	case <-r.Context().Done():
+		// Client disconnected while waiting
+		http.Error(w, "Request cancelled", http.StatusRequestTimeout)
+		return
+	}
+
 	startTime := time.Now()
 
 	// Parse request for metrics
@@ -359,21 +420,22 @@ func (p *Proxy) processNonStreamingResponse(ctx *ProxyContext, body []byte, stat
 
 // recordMetrics records both Prometheus metrics and analytics
 func (p *Proxy) recordMetrics(ctx *ProxyContext, duration float64, tokens int, tokensPerSecond float64, statusCode int, errorMsg string) {
-	// Update Prometheus metrics
-	p.metrics.requestDuration.WithLabelValues(ctx.Model, ctx.Endpoint, ctx.PromptCategory, ctx.ClientIP).Observe(duration)
-	
+	// Update Prometheus metrics (client_ip removed from labels to prevent cardinality explosion)
+	// Client IP is still tracked in analytics SQLite database for detailed analysis
+	p.metrics.requestDuration.WithLabelValues(ctx.Model, ctx.Endpoint, ctx.PromptCategory).Observe(duration)
+
 	status := "success"
 	if statusCode >= 400 {
 		status = "error"
 	} else if errorMsg != "" {
 		status = "error"
 	}
-	p.metrics.requestsTotal.WithLabelValues(ctx.Model, ctx.Endpoint, ctx.PromptCategory, status, ctx.ClientIP).Inc()
+	p.metrics.requestsTotal.WithLabelValues(ctx.Model, ctx.Endpoint, ctx.PromptCategory, status).Inc()
 
 	if tokens > 0 {
-		p.metrics.tokensGenerated.WithLabelValues(ctx.Model, ctx.PromptCategory, ctx.ClientIP).Observe(float64(tokens))
+		p.metrics.tokensGenerated.WithLabelValues(ctx.Model, ctx.PromptCategory).Observe(float64(tokens))
 		if tokensPerSecond > 0 {
-			p.metrics.tokensPerSecond.WithLabelValues(ctx.Model, ctx.PromptCategory, ctx.ClientIP).Observe(tokensPerSecond)
+			p.metrics.tokensPerSecond.WithLabelValues(ctx.Model, ctx.PromptCategory).Observe(tokensPerSecond)
 		}
 	}
 
@@ -476,31 +538,32 @@ func (w *responseWriterWrapper) Write(b []byte) (int, error) {
 // streamingResponseBody wraps the response body for streaming metrics collection
 type streamingResponseBody struct {
 	io.ReadCloser
-	proxy          *Proxy
-	ctx            *ProxyContext
-	accumulated    []byte
-	tokens         int
-	responseText   strings.Builder
-	firstTokenTime time.Time
-	metricsData    map[string]interface{}
+	proxy           *Proxy
+	ctx             *ProxyContext
+	accumulated     []byte
+	tokens          int
+	responseText    strings.Builder
+	firstTokenTime  time.Time
+	metricsData     map[string]interface{}
+	metricsRecorded bool // Prevents double-recording on early close
 }
 
 func (s *streamingResponseBody) Read(p []byte) (n int, err error) {
 	n, err = s.ReadCloser.Read(p)
-	
+
 	if n > 0 {
 		// Accumulate data for metrics (limit to 1MB to prevent memory issues)
 		if len(s.accumulated) < 1024*1024 {
 			s.accumulated = append(s.accumulated, p[:n]...)
 		}
-		
+
 		// Parse NDJSON chunks
 		lines := strings.Split(string(p[:n]), "\n")
 		for _, line := range lines {
 			if line == "" {
 				continue
 			}
-			
+
 			var data map[string]interface{}
 			if err := json.Unmarshal([]byte(line), &data); err == nil {
 				// Extract response text
@@ -511,7 +574,7 @@ func (s *streamingResponseBody) Read(p []byte) (n int, err error) {
 					}
 					s.responseText.WriteString(response)
 				}
-				
+
 				// Store metrics data from the final chunk
 				if done, ok := data["done"].(bool); ok && done {
 					s.metricsData = data
@@ -519,40 +582,60 @@ func (s *streamingResponseBody) Read(p []byte) (n int, err error) {
 			}
 		}
 	}
-	
+
 	// When stream ends, record metrics
 	if err == io.EOF {
-		duration := time.Since(s.ctx.StartTime).Seconds()
-		tokensPerSecond := 0.0
-		tokens := 0
-		
-		// Extract metrics from final data
-		if s.metricsData != nil {
-			if evalCount, ok := s.metricsData["eval_count"].(float64); ok {
-				tokens = int(evalCount)
-				if evalDuration, ok := s.metricsData["eval_duration"].(float64); ok && evalDuration > 0 {
-					tokensPerSecond = evalCount / (evalDuration / 1e9)
-				}
-			}
-			
-			if promptEvalCount, ok := s.metricsData["prompt_eval_count"].(float64); ok {
-				s.ctx.PromptTokens = int(promptEvalCount)
-			}
-			
-			if loadDuration, ok := s.metricsData["load_duration"].(float64); ok {
-				s.ctx.LoadDuration = loadDuration / 1e9
-			}
-			
-			if totalDuration, ok := s.metricsData["total_duration"].(float64); ok {
-				s.ctx.TotalDuration = totalDuration / 1e9
+		s.recordStreamMetrics()
+	}
+
+	return n, err
+}
+
+// Close ensures metrics are recorded even on early connection close
+func (s *streamingResponseBody) Close() error {
+	// Record metrics if not already done (handles early disconnect)
+	if !s.metricsRecorded {
+		s.recordStreamMetrics()
+	}
+	return s.ReadCloser.Close()
+}
+
+// recordStreamMetrics extracts and records metrics from streaming response
+func (s *streamingResponseBody) recordStreamMetrics() {
+	// Prevent double-recording
+	if s.metricsRecorded {
+		return
+	}
+	s.metricsRecorded = true
+
+	duration := time.Since(s.ctx.StartTime).Seconds()
+	tokensPerSecond := 0.0
+	tokens := 0
+
+	// Extract metrics from final data
+	if s.metricsData != nil {
+		if evalCount, ok := s.metricsData["eval_count"].(float64); ok {
+			tokens = int(evalCount)
+			if evalDuration, ok := s.metricsData["eval_duration"].(float64); ok && evalDuration > 0 {
+				tokensPerSecond = evalCount / (evalDuration / 1e9)
 			}
 		}
-		
-		// Store response preview
-		s.ctx.ResponsePreview = truncate(s.responseText.String(), 200)
-		
-		s.proxy.recordMetrics(s.ctx, duration, tokens, tokensPerSecond, 200, "")
+
+		if promptEvalCount, ok := s.metricsData["prompt_eval_count"].(float64); ok {
+			s.ctx.PromptTokens = int(promptEvalCount)
+		}
+
+		if loadDuration, ok := s.metricsData["load_duration"].(float64); ok {
+			s.ctx.LoadDuration = loadDuration / 1e9
+		}
+
+		if totalDuration, ok := s.metricsData["total_duration"].(float64); ok {
+			s.ctx.TotalDuration = totalDuration / 1e9
+		}
 	}
-	
-	return n, err
+
+	// Store response preview
+	s.ctx.ResponsePreview = truncate(s.responseText.String(), 200)
+
+	s.proxy.recordMetrics(s.ctx, duration, tokens, tokensPerSecond, 200, "")
 }

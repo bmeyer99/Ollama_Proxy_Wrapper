@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -12,23 +13,57 @@ import (
 )
 
 const (
-	OllamaRealPort = 11435 // Where Ollama will actually run
-	ProxyPort      = 11434 // Where apps expect Ollama (default port)
-	StartupTimeout = 30 * time.Second
+	DefaultOllamaPort = 11435 // Where Ollama will actually run (default)
+	DefaultProxyPort  = 11434 // Where apps expect Ollama (default)
+	StartupTimeout    = 30 * time.Second
 )
 
 var (
 	// Commands that should start the proxy server
 	proxyCommands = []string{"serve"}
-	
+
 	// All other commands are passed through to Ollama
 )
 
+// getOllamaPort returns the configured Ollama backend port
+func getOllamaPort() int {
+	if port := os.Getenv("OLLAMA_BACKEND_PORT"); port != "" {
+		if p, err := fmt.Sscanf(port, "%d", new(int)); err == nil && p == 1 {
+			var portNum int
+			fmt.Sscanf(port, "%d", &portNum)
+			if portNum > 0 && portNum <= 65535 {
+				return portNum
+			}
+		}
+	}
+	return DefaultOllamaPort
+}
+
+// getProxyPort returns the configured proxy frontend port
+func getProxyPort() int {
+	if port := os.Getenv("PROXY_PORT"); port != "" {
+		if p, err := fmt.Sscanf(port, "%d", new(int)); err == nil && p == 1 {
+			var portNum int
+			fmt.Sscanf(port, "%d", &portNum)
+			if portNum > 0 && portNum <= 65535 {
+				return portNum
+			}
+		}
+	}
+	return DefaultProxyPort
+}
+
 func main() {
+	// Initialize structured logging
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
 	// Check if running as Windows service first
 	serviceFlag := flag.Bool("service", false, "Run as Windows service")
 	flag.Parse()
-	
+
 	if *serviceFlag {
 		runAsService()
 		return
@@ -54,16 +89,20 @@ func main() {
 		os.Exit(exitCode)
 	}
 
+	// Get configured ports
+	ollamaPort := getOllamaPort()
+	proxyPort := getProxyPort()
+
 	// Check if ports are available (single unified check)
-	if isPortOpen("localhost", ProxyPort) {
-		log.Fatalf("Error: Port %d is already in use (existing Ollama or proxy?)\nStop the existing process or use a different port", ProxyPort)
+	if isPortOpen("localhost", proxyPort) {
+		log.Fatalf("Error: Port %d is already in use (existing Ollama or proxy?)\nStop the existing process or use a different port", proxyPort)
 	}
 
-	if isPortOpen("localhost", OllamaRealPort) {
-		log.Fatalf("Error: Port %d is already in use", OllamaRealPort)
+	if isPortOpen("localhost", ollamaPort) {
+		log.Fatalf("Error: Port %d is already in use", ollamaPort)
 	}
 
-	printBanner()
+	printBanner(ollamaPort, proxyPort)
 
 	// Find ollama executable
 	ollamaPath, err := findOllamaExecutable()
@@ -80,9 +119,9 @@ func main() {
 		log.Printf("Warning: Failed to kill existing Ollama: %v", err)
 		// Continue anyway, it might work
 	}
-	
+
 	// Start Ollama process
-	ollamaProcess, err := startOllama(ollamaPath, OllamaRealPort)
+	ollamaProcess, err := startOllama(ollamaPath, ollamaPort)
 	if err != nil {
 		log.Fatalf("Failed to start Ollama: %v", err)
 	}
@@ -93,14 +132,14 @@ func main() {
 	}()
 
 	// Wait for Ollama to be ready
-	if !waitForOllama("localhost", OllamaRealPort, StartupTimeout) {
+	if !waitForOllama("localhost", ollamaPort, StartupTimeout) {
 		log.Fatal("Ollama failed to start")
 	}
 
 	// Start metrics proxy
-	proxy := NewProxy(fmt.Sprintf("http://localhost:%d", OllamaRealPort), ProxyPort)
+	proxy := NewProxy(fmt.Sprintf("http://localhost:%d", ollamaPort), proxyPort)
 	defer proxy.Shutdown()
-	
+
 	go func() {
 		if err := proxy.Start(); err != nil {
 			log.Printf("Proxy error: %v", err)
@@ -110,12 +149,12 @@ func main() {
 	// Give proxy a moment to start
 	time.Sleep(2 * time.Second)
 
-	printProxyReady()
+	printProxyReady(proxyPort)
 
 	// Handle specific commands if not "serve"
 	if command != "serve" && command != "start" {
 		// Run the actual command (e.g., "run phi4")
-		runOllamaCommand(ollamaPath, command, args, ProxyPort)
+		runOllamaCommand(ollamaPath, command, args, proxyPort)
 	}
 
 	// Wait for interrupt signal
@@ -131,21 +170,21 @@ func printUsage() {
 	fmt.Println("  ollama-proxy serve  # Start with metrics proxy")
 }
 
-func printBanner() {
+func printBanner(ollamaPort, proxyPort int) {
 	fmt.Println(strings.Repeat("=", 60))
 	fmt.Println("  Ollama Transparent Metrics Wrapper (Go Edition)")
 	fmt.Println(strings.Repeat("=", 60))
-	fmt.Printf("Starting Ollama on port %d (hidden)\n", OllamaRealPort)
-	fmt.Printf("Starting proxy on port %d (your apps connect here)\n", ProxyPort)
+	fmt.Printf("Starting Ollama on port %d (hidden)\n", ollamaPort)
+	fmt.Printf("Starting proxy on port %d (your apps connect here)\n", proxyPort)
 	fmt.Println(strings.Repeat("=", 60))
 }
 
-func printProxyReady() {
+func printProxyReady(proxyPort int) {
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	fmt.Println("✓ Metrics proxy is running!")
-	fmt.Printf("✓ Your apps can connect to: http://localhost:%d\n", ProxyPort)
-	fmt.Printf("✓ View metrics at: http://localhost:%d/metrics\n", ProxyPort)
-	fmt.Printf("✓ View analytics at: http://localhost:%d/analytics/stats\n", ProxyPort)
+	fmt.Printf("✓ Your apps can connect to: http://localhost:%d\n", proxyPort)
+	fmt.Printf("✓ View metrics at: http://localhost:%d/metrics\n", proxyPort)
+	fmt.Printf("✓ View analytics at: http://localhost:%d/analytics/stats\n", proxyPort)
 	fmt.Println(strings.Repeat("=", 60))
 }
 
