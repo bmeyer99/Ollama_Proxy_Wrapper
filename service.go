@@ -117,6 +117,13 @@ func (s *ollamaProxyService) Execute(args []string, r <-chan svc.ChangeRequest, 
 	LogPrintf("Ollama Proxy Service is now running")
 	LogPrintf("Proxy: http://localhost:11434 -> Ollama: http://localhost:11435")
 
+	// Start health monitoring in background
+	stopHealthCheck := make(chan bool)
+	go s.monitorOllamaHealth(ollamaPath, stopHealthCheck)
+	defer func() {
+		stopHealthCheck <- true
+	}()
+
 loop:
 	for {
 		c := <-r
@@ -146,6 +153,71 @@ loop:
 
 	changes <- svc.Status{State: svc.StopPending}
 	return false, 0
+}
+
+// monitorOllamaHealth monitors Ollama health and restarts if crashed
+func (s *ollamaProxyService) monitorOllamaHealth(ollamaPath string, stop <-chan bool) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	consecutiveFailures := 0
+	const maxFailures = 3 // Restart after 3 consecutive failures
+
+	LogPrintf("Health monitoring started (checking every 30s)")
+
+	for {
+		select {
+		case <-stop:
+			LogPrintf("Health monitoring stopped")
+			return
+		case <-ticker.C:
+			// Check if Ollama is responsive
+			if !waitForOllama("localhost", 11435, 5*time.Second) {
+				consecutiveFailures++
+				s.elog.Warning(1, fmt.Sprintf("Ollama health check failed (%d/%d)", consecutiveFailures, maxFailures))
+				LogPrintf("WARNING: Ollama health check failed (%d/%d)", consecutiveFailures, maxFailures)
+
+				if consecutiveFailures >= maxFailures {
+					s.elog.Error(1, "Ollama appears to have crashed - attempting restart")
+					LogPrintf("CRITICAL: Ollama appears to have crashed - attempting restart")
+
+					// Stop old process
+					if s.ollamaProcess != nil {
+						s.ollamaProcess.Stop()
+						time.Sleep(2 * time.Second)
+					}
+
+					// Kill any remaining Ollama processes
+					if err := killExistingOllama(); err != nil {
+						LogPrintf("Warning: Failed to kill existing Ollama: %v", err)
+					}
+
+					// Restart Ollama
+					newProcess, err := startOllama(ollamaPath, 11435)
+					if err != nil {
+						s.elog.Error(1, fmt.Sprintf("Failed to restart Ollama: %v", err))
+						LogPrintf("ERROR: Failed to restart Ollama: %v", err)
+					} else {
+						s.ollamaProcess = newProcess
+						if waitForOllama("localhost", 11435, 30*time.Second) {
+							s.elog.Info(1, "Ollama restarted successfully")
+							LogPrintf("SUCCESS: Ollama restarted successfully")
+							consecutiveFailures = 0
+						} else {
+							s.elog.Error(1, "Ollama restart failed - not responding")
+							LogPrintf("ERROR: Ollama restart failed - not responding")
+						}
+					}
+				}
+			} else {
+				// Health check passed
+				if consecutiveFailures > 0 {
+					LogPrintf("Ollama health check recovered")
+				}
+				consecutiveFailures = 0
+			}
+		}
+	}
 }
 
 func runAsService() {
