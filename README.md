@@ -98,7 +98,7 @@ Available metrics:
 
 ## Analytics
 
-The proxy stores detailed analytics in SQLite for each request:
+The proxy stores detailed analytics in SQLite for **inference requests only**:
 
 - Model used
 - Prompt and response preview
@@ -106,12 +106,40 @@ The proxy stores detailed analytics in SQLite for each request:
 - Request duration and status
 - Client IP and user agent
 
+### Tracked Endpoints
+
+Only endpoints that generate tokens are tracked in analytics:
+
+| Endpoint | Tracked | Notes |
+|----------|---------|-------|
+| `/api/generate` | Yes | Text generation |
+| `/api/chat` | Yes | Chat conversations |
+| `/api/embeddings` | Yes* | Embeddings (configurable via `TRACK_EMBEDDINGS`) |
+| `/api/tags` | No | Model listing |
+| `/api/pull` | No | Model download |
+| `/api/show` | No | Model info |
+| `/api/copy` | No | Model copy |
+| `/api/delete` | No | Model deletion |
+| `/metrics` | No | Prometheus metrics |
+| `/analytics/*` | No | Dashboard requests |
+
+*Set `TRACK_EMBEDDINGS=false` to exclude embedding requests from analytics.
+
 ### Analytics Endpoints
 
-- `http://localhost:11434/analytics` - Web dashboard
+- `http://localhost:11434/analytics` - Web dashboard with auto-refresh
 - `http://localhost:11434/analytics/stats` - Statistics API
 - `http://localhost:11434/analytics/search` - Search API
 - `http://localhost:11434/analytics/export` - Export data as JSON/CSV
+
+### Dashboard Features
+
+The web dashboard includes:
+- **Auto-refresh**: Configurable refresh intervals (1s, 5s, 10s, 15s, 30s, 60s, or disabled)
+- **Real-time metrics**: Request counts, tokens/second, success rates
+- **Interactive charts**: Timeline, category distribution, token usage, latency histograms
+- **Advanced filtering**: Search by model, time range, status, tokens, and latency
+- **Message explorer**: Detailed view of individual requests with full prompt/response
 
 ### Search Examples
 
@@ -144,6 +172,7 @@ curl "http://localhost:11434/analytics/search?limit=50"
 - `ANALYTICS_BACKEND` - Storage backend: `sqlite` (default), `jsonl`, or `none`
 - `ANALYTICS_DIR` - Analytics storage directory (default: `./ollama_analytics`)
 - `ANALYTICS_RETENTION_DAYS` - Days to keep analytics (default: 7)
+- `TRACK_EMBEDDINGS` - Track embedding requests in analytics: `true` (default) or `false`
 
 **Performance Tuning**:
 
@@ -197,6 +226,30 @@ If port 11434 is already in use:
 1. Verify the proxy is running: `curl http://localhost:11434/test`
 2. Check if Ollama is responding: `curl http://localhost:11435/api/tags`
 3. Ensure your applications are connecting to port 11434
+
+### Analytics Dashboard Shows No Data
+
+If you see empty charts and "No data available" messages:
+
+1. **Make requests through the proxy**: Analytics only appear after making requests through port 11434
+   ```bash
+   # Test with a simple request
+   ollama run phi4 "Hello world"
+   ```
+
+2. **Check browser console**: Open DevTools (F12) and look for errors or data in console logs
+
+3. **Verify database**: Check if analytics database exists
+   - Service mode: `C:\ProgramData\OllamaProxy\analytics\ollama_analytics.db`
+   - Console mode: `.\ollama_analytics\ollama_analytics.db`
+
+4. **Check time range filter**: Default is "Last hour" - if your requests are older, change to "Last 24 hours" or "Last 7 days"
+
+5. **Verify endpoints**: Test the analytics endpoints directly
+   ```bash
+   curl http://localhost:11434/analytics/stats/enhanced
+   curl http://localhost:11434/analytics/messages
+   ```
 
 ### Service Doesn't Stop Ollama
 

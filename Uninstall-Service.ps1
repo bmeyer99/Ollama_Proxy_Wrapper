@@ -38,24 +38,59 @@ if (-not $service) {
     exit 0
 }
 
-# Stop the service if running
-if ($service.Status -eq 'Running') {
-    Write-Log "Stopping service..."
-    Stop-Service -Name $serviceName -Force
+# Stop the service if running or in a pending state
+$service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($service -and $service.Status -ne 'Stopped') {
+    Write-Log "Service status: $($service.Status)"
 
-    # Wait for service to stop (graceful shutdown can take up to 10 seconds)
+    # If service is stopping, wait for it
+    if ($service.Status -eq 'StopPending') {
+        Write-Log "Service is already stopping, waiting..."
+    } else {
+        Write-Log "Stopping service..."
+        try {
+            Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        } catch {
+            Write-Log "Stop-Service failed: $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    # Wait for service to stop (graceful shutdown can take up to 30 seconds)
     $timeout = 30
     $elapsed = 0
-    while ((Get-Service -Name $serviceName).Status -ne 'Stopped' -and $elapsed -lt $timeout) {
+    $lastStatus = ""
+    while ($elapsed -lt $timeout) {
+        $currentService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if (-not $currentService -or $currentService.Status -eq 'Stopped') {
+            Write-Log "Service stopped successfully"
+            break
+        }
+
+        # Log status changes
+        if ($currentService.Status -ne $lastStatus) {
+            Write-Log "Service status: $($currentService.Status)"
+            $lastStatus = $currentService.Status
+        }
+
         Start-Sleep -Seconds 1
         $elapsed++
     }
 
-    if ((Get-Service -Name $serviceName).Status -ne 'Stopped') {
-        Write-Log "Warning: Service did not stop gracefully" "WARN"
+    # Check final status
+    $finalService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($finalService -and $finalService.Status -ne 'Stopped') {
+        Write-Log "Service did not stop gracefully after ${timeout}s (status: $($finalService.Status))" "WARN"
+        Write-Log "Attempting to kill process..."
+
+        # Try to kill the process directly
+        $proc = Get-Process -Name "ollama-proxy" -ErrorAction SilentlyContinue
+        if ($proc) {
+            Stop-Process -Name "ollama-proxy" -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+        }
     }
 
-    # Additional delay to allow cleanup to complete
+    # Additional delay to allow cleanup and port release
     Write-Log "Waiting for cleanup to complete..."
     Start-Sleep -Seconds 5
 }

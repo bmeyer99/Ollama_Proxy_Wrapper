@@ -6,7 +6,7 @@
     <title>Ollama Analytics Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         .message-row:hover { background-color: rgba(59, 130, 246, 0.1); }
@@ -36,9 +36,19 @@
                         Ollama Analytics Explorer
                     </h1>
                     <div class="flex items-center space-x-4">
-                        <button onclick="refreshData()" class="text-gray-600 hover:text-gray-900">
+                        <button onclick="refreshData()" class="text-gray-600 hover:text-gray-900" title="Refresh now">
                             <i class="fas fa-sync-alt"></i>
                         </button>
+                        <select id="autoRefreshInterval" onchange="updateAutoRefresh()"
+                            class="px-3 py-1 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <option value="0">No auto-refresh</option>
+                            <option value="1000">1s refresh</option>
+                            <option value="5000">5s refresh</option>
+                            <option value="10000">10s refresh</option>
+                            <option value="15000">15s refresh</option>
+                            <option value="30000" selected>30s refresh</option>
+                            <option value="60000">60s refresh</option>
+                        </select>
                         <span class="text-sm text-gray-500" id="lastUpdate">Last updated: Never</span>
                     </div>
                 </div>
@@ -325,17 +335,19 @@
         let charts = {};
         let currentPage = 0;
         const pageSize = 50;
+        let autoRefreshTimer = null;
 
         // Initialize dashboard
         document.addEventListener('DOMContentLoaded', async () => {
             await initializeDashboard();
-            setInterval(refreshData, 30000); // Auto-refresh every 30 seconds
+            loadAutoRefreshPreference();
+            updateAutoRefresh();
         });
 
         async function initializeDashboard() {
+            initializeCharts();  // Initialize charts FIRST before loading data
             await loadModels();
             await refreshData();
-            initializeCharts();
         }
 
         async function loadModels() {
@@ -357,25 +369,39 @@
         async function refreshData() {
             try {
                 const filters = getFilters();
-                
+                console.log('Fetching data with filters:', filters);
+
                 // Load enhanced stats for summary cards
                 const statsResponse = await fetch('/analytics/stats/enhanced?' + new URLSearchParams(filters));
+                if (!statsResponse.ok) {
+                    throw new Error(`Stats endpoint returned ${statsResponse.status}: ${statsResponse.statusText}`);
+                }
                 const stats = await statsResponse.json();
-                
+                console.log('Stats loaded:', stats);
+
                 // Load messages for charts and table
                 const messagesResponse = await fetch('/analytics/messages?' + new URLSearchParams(filters));
+                if (!messagesResponse.ok) {
+                    throw new Error(`Messages endpoint returned ${messagesResponse.status}: ${messagesResponse.statusText}`);
+                }
                 messages = await messagesResponse.json();
+                console.log(`Loaded ${messages.length} messages:`, messages.slice(0, 3));
                 filteredMessages = messages;
-                
+
                 updateSummaryCards(stats);
                 updateCharts();
                 updateMessageTable();
-                
-                document.getElementById('lastUpdate').textContent = 
+
+                document.getElementById('lastUpdate').textContent =
                     `Last updated: ${new Date().toLocaleTimeString()}`;
+
+                // Show warning if no data
+                if (messages.length === 0) {
+                    showNotification('No analytics data available. Make some requests through the proxy to see metrics.', 'info');
+                }
             } catch (error) {
                 console.error('Failed to refresh data:', error);
-                showNotification('Failed to load data', 'error');
+                showNotification(`Failed to load data: ${error.message}`, 'error');
             }
         }
 
@@ -586,6 +612,8 @@
         }
 
         function updateCharts() {
+            console.log(`Updating charts with ${filteredMessages.length} messages`);
+
             // Update timeline
             const timelineData = aggregateByTime(filteredMessages);
             charts.timeline.data = {
@@ -596,6 +624,14 @@
                     backgroundColor: 'rgba(59, 130, 246, 0.1)',
                     tension: 0.4
                 }]
+            };
+            charts.timeline.options.plugins = {
+                ...charts.timeline.options.plugins,
+                title: {
+                    display: timelineData.length === 0,
+                    text: 'No data available - Make requests through the proxy to see analytics',
+                    color: '#9CA3AF'
+                }
             };
             charts.timeline.update();
 
@@ -614,6 +650,14 @@
                     ]
                 }]
             };
+            charts.category.options.plugins = {
+                ...charts.category.options.plugins,
+                title: {
+                    display: Object.keys(categoryData).length === 0,
+                    text: 'No data available',
+                    color: '#9CA3AF'
+                }
+            };
             charts.category.update();
 
             // Update token scatter
@@ -628,6 +672,14 @@
                     backgroundColor: 'rgba(59, 130, 246, 0.5)'
                 }]
             };
+            charts.tokenScatter.options.plugins = {
+                ...charts.tokenScatter.options.plugins,
+                title: {
+                    display: scatterData.length === 0,
+                    text: 'No data available',
+                    color: '#9CA3AF'
+                }
+            };
             charts.tokenScatter.update();
 
             // Update latency histogram
@@ -640,25 +692,51 @@
                     backgroundColor: 'rgba(59, 130, 246, 0.8)'
                 }]
             };
+            charts.latency.options.plugins = {
+                ...charts.latency.options.plugins,
+                title: {
+                    display: latencyData.data.every(v => v === 0),
+                    text: 'No data available',
+                    color: '#9CA3AF'
+                }
+            };
             charts.latency.update();
         }
 
         function updateMessageTable() {
             const tbody = document.getElementById('messageTableBody');
             tbody.innerHTML = '';
-            
+
+            if (filteredMessages.length === 0) {
+                // Show empty state
+                const emptyRow = document.createElement('tr');
+                emptyRow.innerHTML = `
+                    <td colspan="7" class="px-6 py-12 text-center text-gray-500">
+                        <i class="fas fa-inbox text-4xl mb-4 block text-gray-300"></i>
+                        <p class="text-lg font-medium mb-2">No analytics data available</p>
+                        <p class="text-sm">Make some requests through the proxy on port 11434 to see analytics</p>
+                        <p class="text-xs mt-2 text-gray-400">Example: <code class="bg-gray-100 px-2 py-1 rounded">ollama run phi4 "Hello world"</code></p>
+                    </td>
+                `;
+                tbody.appendChild(emptyRow);
+
+                document.getElementById('showingCount').textContent = 0;
+                document.getElementById('totalCount').textContent = 0;
+                return;
+            }
+
             const start = 0;
             const end = Math.min(pageSize, filteredMessages.length);
-            
+
             for (let i = start; i < end; i++) {
                 const message = filteredMessages[i];
                 const row = createMessageRow(message);
                 tbody.appendChild(row);
             }
-            
+
             document.getElementById('showingCount').textContent = end;
             document.getElementById('totalCount').textContent = filteredMessages.length;
-            
+
             currentPage = 1;
         }
 
@@ -874,8 +952,35 @@
         }
 
         function showNotification(message, type = 'info') {
-            // Implement notification system
             console.log(`${type}: ${message}`);
+
+            // Create notification element
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 z-50 px-6 py-4 rounded-lg shadow-lg max-w-md ${
+                type === 'error' ? 'bg-red-500 text-white' :
+                type === 'success' ? 'bg-green-500 text-white' :
+                'bg-blue-500 text-white'
+            }`;
+            notification.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <i class="fas fa-${type === 'error' ? 'exclamation-circle' : type === 'success' ? 'check-circle' : 'info-circle'} mr-3"></i>
+                        <span>${message}</span>
+                    </div>
+                    <button onclick="this.parentElement.parentElement.remove()" class="ml-4 text-white hover:text-gray-200">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            `;
+
+            document.body.appendChild(notification);
+
+            // Auto-remove after 5 seconds (10 seconds for info messages about no data)
+            setTimeout(() => {
+                if (notification.parentElement) {
+                    notification.remove();
+                }
+            }, type === 'info' ? 10000 : 5000);
         }
 
         function copyToClipboard(text) {
@@ -902,6 +1007,36 @@
         function filterByCategory(category) {
             // Implement category filtering
             console.log('Filter by category:', category);
+        }
+
+        function loadAutoRefreshPreference() {
+            const savedInterval = localStorage.getItem('autoRefreshInterval');
+            if (savedInterval !== null) {
+                const select = document.getElementById('autoRefreshInterval');
+                select.value = savedInterval;
+            }
+        }
+
+        function updateAutoRefresh() {
+            // Clear existing timer
+            if (autoRefreshTimer) {
+                clearInterval(autoRefreshTimer);
+                autoRefreshTimer = null;
+            }
+
+            const select = document.getElementById('autoRefreshInterval');
+            const interval = parseInt(select.value);
+
+            // Save preference
+            localStorage.setItem('autoRefreshInterval', interval);
+
+            // Set new timer if interval > 0
+            if (interval > 0) {
+                autoRefreshTimer = setInterval(refreshData, interval);
+                console.log(`Auto-refresh enabled: ${interval}ms`);
+            } else {
+                console.log('Auto-refresh disabled');
+            }
         }
     </script>
 </body>

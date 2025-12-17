@@ -418,8 +418,37 @@ func (p *Proxy) processNonStreamingResponse(ctx *ProxyContext, body []byte, stat
 	p.recordMetrics(ctx, duration, tokens, tokensPerSecond, statusCode, "")
 }
 
+// shouldTrackEndpoint determines if an endpoint should be tracked in analytics
+// Only inference endpoints that generate tokens are tracked
+func shouldTrackEndpoint(endpoint string) bool {
+	// Normalize endpoint path
+	endpoint = strings.ToLower(strings.TrimPrefix(endpoint, "api/"))
+
+	// Track only inference endpoints that generate tokens
+	switch endpoint {
+	case "generate", "chat":
+		return true
+	case "embeddings":
+		// Embeddings are tracked but don't generate completion tokens
+		// Can be disabled via environment variable if desired
+		trackEmbeddings := os.Getenv("TRACK_EMBEDDINGS")
+		return trackEmbeddings != "false" // Default to true
+	default:
+		// Skip management endpoints: tags, pull, show, copy, delete, push, etc.
+		// Skip proxy endpoints: metrics, analytics, test
+		return false
+	}
+}
+
 // recordMetrics records both Prometheus metrics and analytics
 func (p *Proxy) recordMetrics(ctx *ProxyContext, duration float64, tokens int, tokensPerSecond float64, statusCode int, errorMsg string) {
+	// Filter out non-inference endpoints to prevent pollution of analytics
+	if !shouldTrackEndpoint(ctx.Endpoint) {
+		// Log but don't record metrics for non-inference endpoints
+		log.Printf("[%s] Skipping analytics for non-inference endpoint: %s", ctx.ClientIP, ctx.Endpoint)
+		return
+	}
+
 	// Update Prometheus metrics (client_ip removed from labels to prevent cardinality explosion)
 	// Client IP is still tracked in analytics SQLite database for detailed analysis
 	p.metrics.requestDuration.WithLabelValues(ctx.Model, ctx.Endpoint, ctx.PromptCategory).Observe(duration)
@@ -463,7 +492,7 @@ func (p *Proxy) recordMetrics(ctx *ProxyContext, duration float64, tokens int, t
 		TimeToFirstToken: ctx.TimeToFirstToken,
 		Metadata:         map[string]interface{}{"endpoint": ctx.Endpoint},
 	}
-	
+
 	p.analytics.Record(record)
 
 	log.Printf("[%s] %s/%s - %.2fs - %d tokens - %d", ctx.ClientIP, ctx.Model, ctx.PromptCategory, duration, tokens, statusCode)
