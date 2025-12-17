@@ -19,6 +19,7 @@ A transparent HTTP proxy for Ollama that adds Prometheus metrics collection and 
 
 ### Reliability
 
+- **Automatic Crash Recovery**: Health monitoring checks Ollama every 30 seconds and auto-restarts if crashed
 - **SQLite Connection Pool**: Configured for single-writer mode with WAL journal for optimal performance
 - **Graceful Shutdown**: 10-second grace period ensures in-flight requests complete before shutdown
 - **Memory Leak Fixes**: Proper cleanup of streaming response bodies on client disconnect
@@ -200,9 +201,22 @@ If port 11434 is already in use:
 ### Service Doesn't Stop Ollama
 
 If Ollama processes remain after stopping the service:
+
 1. Check Windows Event Viewer for termination errors
 2. Manually kill with: `taskkill /F /IM ollama.exe`
 3. Restart the service
+
+### Ollama Keeps Crashing Under Load
+
+The service includes automatic crash recovery:
+
+- Health checks run every 30 seconds
+- Ollama automatically restarts after 3 failed health checks (90 seconds)
+- Check logs in `C:\ProgramData\OllamaProxy\logs\` for crash details
+- If crashes persist, consider:
+  - Reducing concurrent request limits
+  - Increasing system resources (RAM/GPU)
+  - Checking Ollama logs for memory issues
 
 ## Development
 
