@@ -161,9 +161,9 @@ func (s *ollamaProxyService) monitorOllamaHealth(ollamaPath string, stop <-chan 
 	defer ticker.Stop()
 
 	consecutiveFailures := 0
-	const maxFailures = 3 // Restart after 3 consecutive failures
+	const maxFailures = 1 // Restart immediately on failure
 
-	LogPrintf("Health monitoring started (checking every 30s)")
+	LogPrintf("Health monitoring started (checking every 30s, 10s timeout)")
 
 	for {
 		select {
@@ -171,8 +171,8 @@ func (s *ollamaProxyService) monitorOllamaHealth(ollamaPath string, stop <-chan 
 			LogPrintf("Health monitoring stopped")
 			return
 		case <-ticker.C:
-			// Check if Ollama is responsive
-			if !waitForOllama("localhost", 11435, 5*time.Second) {
+			// Check if Ollama is responsive (10s timeout for faster response)
+			if !waitForOllama("localhost", 11435, 10*time.Second) {
 				consecutiveFailures++
 				s.elog.Warning(1, fmt.Sprintf("Ollama health check failed (%d/%d)", consecutiveFailures, maxFailures))
 				LogPrintf("WARNING: Ollama health check failed (%d/%d)", consecutiveFailures, maxFailures)

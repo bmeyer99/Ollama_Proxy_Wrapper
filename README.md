@@ -211,7 +211,8 @@ If Ollama processes remain after stopping the service:
 The service includes automatic crash recovery:
 
 - Health checks run every 30 seconds
-- Ollama automatically restarts after 3 failed health checks (90 seconds)
+- Each check has a 10-second timeout for faster failure detection
+- Ollama automatically restarts immediately if it fails to respond
 - Check logs in `C:\ProgramData\OllamaProxy\logs\` for crash details
 - If crashes persist, consider:
   - Reducing concurrent request limits
