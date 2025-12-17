@@ -82,6 +82,15 @@ Your App → :11434 (Proxy) → :11435 (Ollama)
          Metrics + Analytics
 ```
 
+## Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/` | Proxy - forwards to Ollama backend |
+| `/metrics` | Prometheus metrics |
+| `/analytics` | Analytics dashboard |
+| `/test` | Health check - tests proxy and Ollama connectivity |
+
 ## Metrics
 
 Access Prometheus metrics at: `http://localhost:11434/metrics`
@@ -100,10 +109,11 @@ Available metrics:
 
 The proxy stores detailed analytics in SQLite for **inference requests only**:
 
-- Model used
-- Prompt and response preview
-- Token counts and generation speed
-- Request duration and status
+- Model used and endpoint
+- Prompt and response preview (truncated)
+- Token counts: `input_tokens`, `output_tokens`, `tokens_per_second`
+- Timing: `latency`, `load_duration`, `total_duration`, `time_to_first_token`
+- Request status and error message
 - Client IP and user agent
 
 ### Tracked Endpoints
@@ -127,10 +137,19 @@ Only endpoints that generate tokens are tracked in analytics:
 
 ### Analytics Endpoints
 
-- `http://localhost:11434/analytics` - Web dashboard with auto-refresh
-- `http://localhost:11434/analytics/stats` - Statistics API
-- `http://localhost:11434/analytics/search` - Search API
-- `http://localhost:11434/analytics/export` - Export data as JSON/CSV
+| Endpoint | Description |
+|----------|-------------|
+| `/analytics` | Web dashboard with auto-refresh |
+| `/analytics/stats` | Basic statistics API |
+| `/analytics/stats/enhanced` | Enhanced stats with SQL aggregations (used by dashboard) |
+| `/analytics/messages` | Paginated message list |
+| `/analytics/messages/{id}` | Individual message detail with full prompt/response |
+| `/analytics/models` | List of models seen in analytics |
+| `/analytics/search` | Search API with filters |
+| `/analytics/export` | Export data as JSON or CSV |
+
+**Query Parameters for `/analytics/stats/enhanced`:**
+- `hours` - Time range in hours (default: 24)
 
 ### Dashboard Features
 
@@ -276,16 +295,22 @@ The service includes automatic crash recovery:
 
 ### Project Structure
 
-```
+```text
 ollama-proxy-go/
-├── main.go                 # Entry point and CLI handling
-├── proxy.go               # HTTP reverse proxy implementation
-├── metrics.go             # Prometheus metrics collection
-├── analytics.go           # Analytics storage and querying
-├── ollama.go              # Ollama process management
-├── service.go             # Windows service implementation
-├── context.go             # Request context for metrics
-├── logging.go             # Service-mode file logging
+├── main.go                  # Entry point and CLI handling
+├── proxy.go                 # HTTP reverse proxy implementation
+├── metrics.go               # Prometheus metrics collection
+├── analytics.go             # Analytics storage, querying, and dashboard handlers
+├── analytics_endpoints.go   # Enhanced analytics API endpoints
+├── ollama.go                # Ollama process management
+├── ollama_windows.go        # Windows-specific process management
+├── ollama_other.go          # Unix process management fallback
+├── service.go               # Windows service implementation
+├── service_stub.go          # Service stub for non-Windows builds
+├── context.go               # Request context for metrics correlation
+├── logging.go               # Logging configuration
+├── logging_windows.go       # Windows-specific file logging for service mode
+├── logging_other.go         # Unix logging fallback
 └── analytics_dashboard.html # Web UI for analytics
 ```
 
