@@ -31,29 +31,29 @@ type Proxy struct {
 }
 
 // NewProxy creates a new proxy instance
-func NewProxy(targetURL string, port int) *Proxy {
+func NewProxy(targetURL string, port int, isService bool) *Proxy {
 	target, err := url.Parse(targetURL)
 	if err != nil {
 		log.Fatalf("Invalid target URL: %v", err)
 	}
 
 	// Determine analytics directory based on execution context
-	analyticsDir := filepath.Join(".", "ollama_analytics")
-	
-	// When running as a service, use a proper data directory
-	if exePath, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exePath)
-		// Check if we're running from System32 (service context)
-		if strings.Contains(strings.ToLower(exeDir), "system32") {
-			// Use ProgramData for service data
-			programData := os.Getenv("ProgramData")
-			if programData == "" {
-				programData = "C:\\ProgramData"
-			}
-			analyticsDir = filepath.Join(programData, "OllamaProxy", "analytics")
-		} else {
-			// Use directory relative to executable
+	var analyticsDir string
+
+	if isService {
+		// Service mode: use ProgramData
+		programData := os.Getenv("ProgramData")
+		if programData == "" {
+			programData = "C:\\ProgramData"
+		}
+		analyticsDir = filepath.Join(programData, "OllamaProxy", "analytics")
+	} else {
+		// Console mode: use directory relative to executable
+		if exePath, err := os.Executable(); err == nil {
+			exeDir := filepath.Dir(exePath)
 			analyticsDir = filepath.Join(exeDir, "ollama_analytics")
+		} else {
+			analyticsDir = filepath.Join(".", "ollama_analytics")
 		}
 	}
 	

@@ -13,20 +13,12 @@ import (
 
 // InitServiceLogging sets up file-based logging when running as a Windows service
 func InitServiceLogging() error {
-	// Determine log directory
-	logDir := filepath.Join(".", "logs")
-	
-	// When running as a service, use ProgramData
-	if exePath, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exePath)
-		if strings.Contains(strings.ToLower(exeDir), "system32") {
-			programData := os.Getenv("ProgramData")
-			if programData == "" {
-				programData = "C:\\ProgramData"
-			}
-			logDir = filepath.Join(programData, "OllamaProxy", "logs")
-		}
+	// Always use ProgramData for service mode
+	programData := os.Getenv("ProgramData")
+	if programData == "" {
+		programData = "C:\\ProgramData"
 	}
+	logDir := filepath.Join(programData, "OllamaProxy", "logs")
 	
 	// Ensure log directory exists
 	if err := os.MkdirAll(logDir, 0755); err != nil {

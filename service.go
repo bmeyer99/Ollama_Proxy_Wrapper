@@ -86,7 +86,7 @@ func (s *ollamaProxyService) Execute(args []string, r <-chan svc.ChangeRequest, 
 
 	// Start metrics proxy on 11434 (where apps expect Ollama) forwarding to 11435
 	LogPrintf("Creating proxy to forward localhost:11434 -> localhost:11435")
-	s.proxy = NewProxy("http://localhost:11435", 11434)
+	s.proxy = NewProxy("http://localhost:11435", 11434, true)
 	
 	// Start proxy in background
 	go func() {

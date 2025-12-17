@@ -137,7 +137,7 @@ func main() {
 	}
 
 	// Start metrics proxy
-	proxy := NewProxy(fmt.Sprintf("http://localhost:%d", ollamaPort), proxyPort)
+	proxy := NewProxy(fmt.Sprintf("http://localhost:%d", ollamaPort), proxyPort, false)
 	defer proxy.Shutdown()
 
 	go func() {
