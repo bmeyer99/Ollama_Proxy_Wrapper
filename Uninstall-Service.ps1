@@ -42,18 +42,22 @@ if (-not $service) {
 if ($service.Status -eq 'Running') {
     Write-Log "Stopping service..."
     Stop-Service -Name $serviceName -Force
-    
-    # Wait for service to stop
+
+    # Wait for service to stop (graceful shutdown can take up to 10 seconds)
     $timeout = 30
     $elapsed = 0
     while ((Get-Service -Name $serviceName).Status -ne 'Stopped' -and $elapsed -lt $timeout) {
         Start-Sleep -Seconds 1
         $elapsed++
     }
-    
+
     if ((Get-Service -Name $serviceName).Status -ne 'Stopped') {
         Write-Log "Warning: Service did not stop gracefully" "WARN"
     }
+
+    # Additional delay to allow cleanup to complete
+    Write-Log "Waiting for cleanup to complete..."
+    Start-Sleep -Seconds 5
 }
 
 # Uninstall using WinSW if available
