@@ -301,7 +301,11 @@ foreach ($logFile in $logFiles) {
 # Service is now installed
 if ($true) {
     Write-Log "Service installed successfully"
-    
+
+    # Wait for ports to be fully released from previous instance
+    Write-Log "Waiting for ports to be released..."
+    Start-Sleep -Seconds 5
+
     # Start the service
     Write-Log "Starting service..."
     try {
