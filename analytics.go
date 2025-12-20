@@ -337,7 +337,7 @@ func (aw *AnalyticsWriter) Search(params url.Values) ([]AnalyticsRecord, error) 
 	}
 	defer rows.Close()
 
-	var results []AnalyticsRecord
+	results := make([]AnalyticsRecord, 0)
 	for rows.Next() {
 		var r AnalyticsRecord
 		var metadataJSON string
