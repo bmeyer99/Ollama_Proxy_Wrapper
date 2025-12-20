@@ -422,10 +422,15 @@ func (p *Proxy) processNonStreamingResponse(ctx *ProxyContext, body []byte, stat
 // Only inference endpoints that generate tokens are tracked
 func shouldTrackEndpoint(endpoint string) bool {
 	// Normalize endpoint path
-	endpoint = strings.ToLower(strings.TrimPrefix(endpoint, "api/"))
+	normalized := strings.ToLower(strings.TrimPrefix(endpoint, "/"))
+	if strings.HasPrefix(normalized, "api/") {
+		normalized = strings.TrimPrefix(normalized, "api/")
+	} else if strings.HasPrefix(normalized, "v1/") {
+		normalized = strings.TrimPrefix(normalized, "v1/")
+	}
 
 	// Track only inference endpoints that generate tokens
-	switch endpoint {
+	switch normalized {
 	case "generate", "chat":
 		return true
 	case "embeddings":
@@ -433,6 +438,9 @@ func shouldTrackEndpoint(endpoint string) bool {
 		// Can be disabled via environment variable if desired
 		trackEmbeddings := os.Getenv("TRACK_EMBEDDINGS")
 		return trackEmbeddings != "false" // Default to true
+	case "chat/completions", "completions":
+		// OpenAI-compatible endpoints
+		return true
 	default:
 		// Skip management endpoints: tags, pull, show, copy, delete, push, etc.
 		// Skip proxy endpoints: metrics, analytics, test
